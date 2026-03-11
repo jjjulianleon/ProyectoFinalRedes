@@ -1,0 +1,49 @@
+# ===== Archivos sensibles =====
+.env
+*.env
+.env.*
+
+# ===== Propuestas y plan (documentos privados) =====
+Propuesta Proyecto.pdf
+Propuesta_Proyecto_Redes.pdf
+CTF_Project_Plan_ClaudeCode.md
+prompt.txt
+
+# ===== Docker =====
+docker-compose.override.yml
+
+# ===== Capturas de trafico (pueden contener datos sensibles) =====
+analysis/captures/
+*.pcap
+*.pcapng
+*.cap
+
+# ===== Logs =====
+*.log
+logs/
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+venv/
+.venv/
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+*~
+.directory
+
+# ===== IDE =====
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ===== Volumes y datos de Docker =====
+ctfd-db-data/

@@ -1,0 +1,214 @@
+###############################################################################
+# CTF Layer 2 Security - Docker Compose
+# Red Team vs Blue Team: ARP Spoofing & MAC Flooding
+# Red bridge personalizada: 172.20.0.0/24
+###############################################################################
+
+services:
+
+  # =========================================================================
+  # GATEWAY/ROUTER - Simula el punto de salida de la red corporativa
+  # Habilita IP forwarding para reenviar paquetes entre hosts
+  # =========================================================================
+  gateway:
+    build: ./containers/gateway
+    container_name: gateway
+    hostname: gateway
+    cap_add:
+      - NET_ADMIN        # Necesario para configurar interfaces y rutas
+    sysctls:
+      - net.ipv4.ip_forward=1   # Habilita reenvio de paquetes (actua como router)
+    networks:
+      ctf-network:
+        ipv4_address: 172.20.0.2
+    restart: unless-stopped
+
+  # =========================================================================
+  # VICTIMS - Hosts con servicios vulnerables y flags ocultas
+  # Cada victim corre un servicio HTTP basico (se configuran en Fase 2)
+  # =========================================================================
+  victim1:
+    build:
+      context: ./containers/victim
+      args:
+        VICTIM_ID: "1"
+    container_name: victim1
+    hostname: victim1
+    environment:
+      - VICTIM_ID=1
+      - FLAG=${FLAG1}
+    networks:
+      ctf-network:
+        ipv4_address: 172.20.0.10
+    depends_on:
+      - gateway
+    restart: unless-stopped
+
+  victim2:
+    build:
+      context: ./containers/victim
+      args:
+        VICTIM_ID: "2"
+    container_name: victim2
+    hostname: victim2
+    environment:
+      - VICTIM_ID=2
+      - FLAG=${FLAG2}
+    networks:
+      ctf-network:
+        ipv4_address: 172.20.0.11
+    depends_on:
+      - gateway
+    restart: unless-stopped
+
+  victim3:
+    build:
+      context: ./containers/victim
+      args:
+        VICTIM_ID: "3"
+    container_name: victim3
+    hostname: victim3
+    environment:
+      - VICTIM_ID=3
+      - FLAG=${FLAG3}
+      - GATEWAY_IP=172.20.0.2
+    networks:
+      ctf-network:
+        ipv4_address: 172.20.0.12
+    depends_on:
+      - gateway
+    restart: unless-stopped
+
+  # =========================================================================
+  # RED TEAM - Contenedor del atacante
+  # Equipado con Scapy, tcpdump y scripts ofensivos
+  # Necesita NET_ADMIN y NET_RAW para manipular paquetes a nivel de Capa 2
+  # =========================================================================
+  redteam:
+    build: ./containers/redteam
+    container_name: redteam
+    hostname: redteam
+    stdin_open: true       # Mantiene el contenedor corriendo (modo interactivo)
+    tty: true
+    cap_add:
+      - NET_ADMIN          # Modificar interfaces, tablas ARP, rutas
+      - NET_RAW            # Enviar/recibir paquetes raw (Scapy necesita esto)
+    sysctls:
+      - net.ipv4.ip_forward=1   # Necesario para MITM (reenviar paquetes interceptados)
+    networks:
+      ctf-network:
+        ipv4_address: 172.20.0.100
+    depends_on:
+      - gateway
+      - victim1
+      - victim2
+      - victim3
+    restart: unless-stopped
+
+  # =========================================================================
+  # BLUE TEAM - Contenedor del defensor
+  # Equipado con Scapy, herramientas de analisis y acceso a dashboards
+  # =========================================================================
+  blueteam:
+    build: ./containers/blueteam
+    container_name: blueteam
+    hostname: blueteam
+    stdin_open: true
+    tty: true
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    networks:
+      ctf-network:
+        ipv4_address: 172.20.0.200
+    depends_on:
+      - gateway
+      - victim1
+      - victim2
+      - victim3
+    restart: unless-stopped
+
+  # =========================================================================
+  # CTFd - Plataforma de gestion de la competencia CTF
+  # Gestiona challenges, flags, scoring y tablero en tiempo real
+  # Usa MariaDB como base de datos para persistencia
+  # Accesible via navegador en http://172.20.0.250:8000
+  # =========================================================================
+  ctfd:
+    image: ctfd/ctfd:latest
+    container_name: ctfd
+    hostname: ctfd
+    environment:
+      - DATABASE_URL=mysql+pymysql://ctfd:ctfd_password@ctfd-db/ctfd
+      - REDIS_URL=redis://ctfd-cache:6379
+      - WORKERS=1
+      - LOG_FOLDER=/var/log/CTFd
+      - ACCESS_LOG=-
+      - ERROR_LOG=-
+    ports:
+      - "8000:8000"          # Accesible desde el host en localhost:8000
+    networks:
+      ctf-network:
+        ipv4_address: 172.20.0.250
+    depends_on:
+      ctfd-db:
+        condition: service_healthy
+      ctfd-cache:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Base de datos para CTFd
+  ctfd-db:
+    image: mariadb:10.11
+    container_name: ctfd-db
+    hostname: ctfd-db
+    environment:
+      - MYSQL_ROOT_PASSWORD=ctfd_root_password
+      - MYSQL_USER=ctfd
+      - MYSQL_PASSWORD=ctfd_password
+      - MYSQL_DATABASE=ctfd
+    volumes:
+      - ctfd-db-data:/var/lib/mysql
+    networks:
+      ctf-network:
+        ipv4_address: 172.20.0.251
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Cache Redis para CTFd
+  ctfd-cache:
+    image: redis:7-alpine
+    container_name: ctfd-cache
+    hostname: ctfd-cache
+    networks:
+      ctf-network:
+        ipv4_address: 172.20.0.252
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+# =============================================================================
+# VOLUMES - Persistencia de datos
+# =============================================================================
+volumes:
+  ctfd-db-data:
+
+# =============================================================================
+# RED DOCKER BRIDGE PERSONALIZADA
+# Simula una LAN conmutada donde todos los hosts estan en el mismo segmento L2
+# El driver "bridge" crea un switch virtual en el kernel de Linux
+# =============================================================================
+networks:
+  ctf-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+          gateway: 172.20.0.1
