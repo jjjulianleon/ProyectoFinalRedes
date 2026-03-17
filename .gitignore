@@ -3,6 +3,9 @@
 *.env
 .env.*
 
+# ===== Bitácora y documentos privados =====
+BITACORA.md
+
 # ===== Propuestas y plan (documentos privados) =====
 Propuesta Proyecto.pdf
 Propuesta_Proyecto_Redes.pdf
