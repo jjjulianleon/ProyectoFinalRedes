@@ -45,5 +45,10 @@ Thumbs.db
 *.swp
 *.swo
 
+# ===== Certificados SSL (generados localmente) =====
+containers/wazuh/certs/
+**/certs/*.pem
+**/certs/*.key
+
 # ===== Volumes y datos de Docker =====
 ctfd-db-data/

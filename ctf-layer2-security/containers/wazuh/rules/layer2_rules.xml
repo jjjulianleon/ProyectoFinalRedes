@@ -1,0 +1,120 @@
+<!--
+  Reglas Wazuh Custom - Deteccion de Ataques de Capa 2
+  Estas reglas detectan indicadores de ARP Spoofing y MAC Flooding
+  a nivel de endpoint (HIDS).
+
+  SINTAXIS DE REGLAS WAZUH:
+  - <rule id="X"> : ID unico (custom rules: 100000-120000)
+  - <if_sid>      : Se activa si la regla padre (sid) ya hizo match
+  - <match>       : Busca un patron en el log
+  - <regex>       : Expresion regular sobre el log
+  - <field>       : Busca en un campo decodificado especifico
+  - <frequency>   : Numero de veces que debe ocurrir en <timeframe>
+  - <level>       : Severidad de la alerta (0-15)
+  - <description> : Descripcion legible de la alerta
+  - <group>       : Grupos para categorizar la alerta
+-->
+
+<group name="layer2,arp_spoofing,mac_flooding,">
+
+  <!-- ================================================================
+       REGLAS DE ARP SPOOFING (deteccion a nivel de endpoint)
+       ================================================================ -->
+
+  <!-- Regla 100001: Detecta cambios en la tabla ARP del sistema
+       Cuando un agente reporta cambios en /proc/net/arp via syscheck,
+       puede indicar que alguien esta envenenando la cache ARP -->
+  <rule id="100001" level="10">
+    <if_group>syscheck</if_group>
+    <match>/proc/net/arp</match>
+    <description>Cambio detectado en tabla ARP del sistema - posible ARP Spoofing</description>
+    <group>layer2,arp_spoofing,</group>
+  </rule>
+
+  <!-- Regla 100002: Multiples cambios en tabla ARP en poco tiempo
+       Si la tabla ARP cambia mas de 5 veces en 30 segundos,
+       es un fuerte indicador de ARP cache poisoning activo -->
+  <rule id="100002" level="13" frequency="5" timeframe="30">
+    <if_matched_sid>100001</if_matched_sid>
+    <description>ALERTA: Multiples cambios en tabla ARP detectados - ARP Spoofing en progreso</description>
+    <group>layer2,arp_spoofing,attack,</group>
+  </rule>
+
+  <!-- Regla 100003: Detecta ejecucion de herramientas de ARP spoofing
+       Busca en los logs de comandos ejecutados (auditd o command monitoring) -->
+  <rule id="100003" level="12">
+    <if_group>ossec</if_group>
+    <match>arpspoof|ettercap|bettercap|scapy</match>
+    <description>Herramienta de ARP Spoofing detectada en ejecucion</description>
+    <group>layer2,arp_spoofing,tool_detected,</group>
+  </rule>
+
+  <!-- ================================================================
+       REGLAS DE FILE INTEGRITY MONITORING (FIM) para FLAGS
+       ================================================================ -->
+
+  <!-- Regla 100010: Detecta acceso o modificacion a archivos de flags
+       El syscheck de Wazuh monitorea /flags en tiempo real -->
+  <rule id="100010" level="12">
+    <if_group>syscheck</if_group>
+    <match>/flags/</match>
+    <description>ALERTA: Acceso o modificacion a archivo de flag detectado</description>
+    <group>layer2,flag_access,integrity,</group>
+  </rule>
+
+  <!-- Regla 100011: Flag exfiltrada - archivo de flag fue leido
+       Detecta lectura de archivos en /flags (requiere auditd) -->
+  <rule id="100011" level="14">
+    <if_group>syscheck</if_group>
+    <match>flag</match>
+    <match>deleted</match>
+    <description>CRITICO: Archivo de flag posiblemente exfiltrado o eliminado</description>
+    <group>layer2,flag_exfiltration,</group>
+  </rule>
+
+  <!-- ================================================================
+       REGLAS DE MAC FLOODING (deteccion a nivel de endpoint)
+       ================================================================ -->
+
+  <!-- Regla 100020: Detecta tabla ARP con numero anomalo de entradas
+       En una red pequena como la nuestra (10 hosts), mas de 20 entradas
+       en la tabla ARP es anomalo e indica posible MAC flooding -->
+  <rule id="100020" level="10">
+    <if_group>ossec</if_group>
+    <match>arp_entries_anomaly</match>
+    <description>Numero anomalo de entradas en tabla ARP - posible MAC Flooding</description>
+    <group>layer2,mac_flooding,</group>
+  </rule>
+
+  <!-- Regla 100021: Detecta trafico broadcast excesivo
+       Un indicador de MAC flooding es el aumento de trafico broadcast
+       cuando la tabla CAM del switch se desborda -->
+  <rule id="100021" level="12" frequency="10" timeframe="20">
+    <if_matched_sid>100020</if_matched_sid>
+    <description>ALERTA: MAC Flooding en progreso - tabla CAM posiblemente desbordada</description>
+    <group>layer2,mac_flooding,attack,</group>
+  </rule>
+
+  <!-- ================================================================
+       REGLAS DE DETECCION GENERICA DE CAPA 2
+       ================================================================ -->
+
+  <!-- Regla 100030: Detecta cambio de MAC del gateway
+       Si la MAC del gateway cambia, es un indicador claro de MITM -->
+  <rule id="100030" level="14">
+    <if_group>syscheck</if_group>
+    <match>gateway_mac_changed</match>
+    <description>CRITICO: MAC del gateway ha cambiado - ataque MITM confirmado</description>
+    <group>layer2,arp_spoofing,mitm,</group>
+  </rule>
+
+  <!-- Regla 100031: Detecta duplicacion de IP en la red
+       Cuando dos MACs diferentes responden por la misma IP -->
+  <rule id="100031" level="13">
+    <if_group>ossec</if_group>
+    <match>duplicate_ip_detected</match>
+    <description>ALERTA: IP duplicada detectada en la red - posible ARP Spoofing</description>
+    <group>layer2,arp_spoofing,duplicate_ip,</group>
+  </rule>
+
+</group>

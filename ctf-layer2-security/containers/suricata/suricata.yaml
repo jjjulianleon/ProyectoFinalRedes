@@ -1,0 +1,99 @@
+# ============================================================================
+# Suricata - Configuracion para CTF Layer 2 Security
+# Motor NIDS en modo AF_PACKET para inspeccionar trafico de Capa 2
+# ============================================================================
+
+%YAML 1.1
+---
+
+# Variables de red
+vars:
+  address-groups:
+    HOME_NET: "[172.20.0.0/24]"
+    EXTERNAL_NET: "!$HOME_NET"
+    CTF_GATEWAY: "172.20.0.2"
+    CTF_VICTIMS: "[172.20.0.10, 172.20.0.11, 172.20.0.12]"
+    CTF_REDTEAM: "172.20.0.100"
+    CTF_BLUETEAM: "172.20.0.200"
+  port-groups:
+    HTTP_PORTS: "80"
+
+# Configuracion global
+stats:
+  enabled: yes
+  interval: 60
+
+# Outputs - Donde se guardan las alertas
+outputs:
+  # Alertas en formato EVE JSON (formato principal)
+  - eve-log:
+      enabled: yes
+      filetype: regular
+      filename: /var/log/suricata/eve.json
+      types:
+        - alert:
+            metadata: yes
+            tagged-packets: yes
+        - anomaly:
+            enabled: yes
+        - http:
+            extended: yes
+        - dns
+        - tls:
+            extended: yes
+        - stats:
+            totals: yes
+            threads: no
+
+  # Log de alertas rapido (una linea por alerta)
+  - fast:
+      enabled: yes
+      filename: /var/log/suricata/fast.log
+
+  # Stats
+  - stats:
+      enabled: yes
+      filename: /var/log/suricata/stats.log
+
+# Modo de captura AF_PACKET (captura a nivel de kernel, eficiente)
+af-packet:
+  - interface: eth0
+    cluster-id: 99
+    cluster-type: cluster_flow
+    defrag: yes
+    use-mmap: yes
+    tpacket-v3: yes
+    # Modo promiscuo: captura TODO el trafico de la red bridge,
+    # no solo el destinado a este contenedor
+    promisc: yes
+
+# Reglas a cargar
+default-rule-path: /var/lib/suricata/rules
+rule-files:
+  - layer2.rules
+
+# Motor de deteccion
+detect:
+  profile: medium
+  sgh-mpm-context: auto
+  inspection-recursion-limit: 3000
+
+# Logging de Suricata (no confundir con alertas)
+logging:
+  default-log-level: notice
+  outputs:
+    - console:
+        enabled: yes
+    - file:
+        enabled: yes
+        filename: /var/log/suricata/suricata.log
+
+# App layer protocols
+app-layer:
+  protocols:
+    http:
+      enabled: yes
+    tls:
+      enabled: yes
+    dns:
+      enabled: yes
