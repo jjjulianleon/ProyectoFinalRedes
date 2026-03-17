@@ -6,28 +6,39 @@ ARP Monitor - Detector de ARP Spoofing en tiempo real
 Este script monitorea el trafico ARP de la red para detectar ataques
 de ARP Spoofing (ARP Cache Poisoning).
 
-COMO DETECTA EL ATAQUE:
-  1. Construye una tabla de asociaciones IP <-> MAC legitimas
-  2. Monitorea todos los paquetes ARP en la red
-  3. Si una IP cambia de MAC, genera una ALERTA (posible ARP Spoofing)
-  4. Detecta multiples ARP Reply sin Request previo (gratuitous ARP sospechoso)
-  5. Detecta si dos IPs diferentes reclaman la misma MAC
+MODOS DE DETECCION:
 
-INDICADORES DE ARP SPOOFING:
-  - Una IP conocida cambia de MAC repentinamente
-  - Rafaga de ARP Replies no solicitados
-  - Multiples IPs apuntando a la misma MAC (MITM)
-  - ARP Reply con MAC origen diferente a la MAC en el header Ethernet
+  Modo Pasivo (--passive):
+    Escucha ARP Replies en la red y detecta cambios de MAC.
+    Funciona mejor cuando el monitor esta en el mismo segmento que las
+    victimas y puede ver el trafico ARP unicast (modo promiscuo o hub).
+
+  Modo Activo (default):
+    Envia ARP Requests periodicos a los hosts conocidos y compara las
+    respuestas con la baseline. Funciona en cualquier topologia porque
+    genera su propio trafico de verificacion.
+    Tecnica: "ARP Polling" - si un host responde con una MAC diferente
+    a la registrada en la baseline, hay spoofing.
+
+COMO DETECTA EL ATAQUE (Modo Activo):
+  1. Resuelve las MACs reales de todos los hosts conocidos (baseline)
+  2. Cada N segundos, envia ARP Request a cada host conocido
+  3. Compara la MAC de respuesta con la baseline
+  4. Si la MAC cambio, genera ALERTA (alguien esta suplantando ese host)
+  5. Tambien detecta si multiples IPs responden con la misma MAC (MITM)
 
 EJEMPLO DE USO:
-  # Monitoreo basico
-  python3 arp_monitor.py
-
-  # Monitoreo con IPs conocidas pre-cargadas
+  # Monitoreo activo (recomendado para Docker/switch)
   python3 arp_monitor.py --known 172.20.0.2 172.20.0.10 172.20.0.11 172.20.0.12
 
+  # Monitoreo pasivo (para redes con hub o modo promiscuo)
+  python3 arp_monitor.py --passive --known 172.20.0.2 172.20.0.10
+
+  # Intervalo de probing personalizado
+  python3 arp_monitor.py --known 172.20.0.2 172.20.0.10 --probe-interval 3
+
   # Guardar alertas en archivo
-  python3 arp_monitor.py -o /logs/arp_alerts.log
+  python3 arp_monitor.py -o /logs/arp_alerts.log --known 172.20.0.2 172.20.0.10
 
 REQUISITOS:
   - Privilegios root (NET_RAW)
@@ -39,6 +50,7 @@ import argparse
 import sys
 import time
 import signal
+import threading
 from datetime import datetime
 from collections import defaultdict
 from scapy.all import sniff, ARP, Ether, srp, conf
@@ -47,23 +59,30 @@ from scapy.all import sniff, ARP, Ether, srp, conf
 class ARPMonitor:
     """Monitor de trafico ARP para deteccion de ARP Spoofing."""
 
-    def __init__(self, iface="eth0", known_hosts=None, output_file=None):
+    def __init__(self, iface="eth0", known_hosts=None, output_file=None,
+                 probe_interval=5):
         self.iface = iface
         self.output_file = output_file
+        self.probe_interval = probe_interval
 
-        # Tabla de asociaciones IP -> MAC conocidas
-        # Se llena dinamicamente o con hosts pre-configurados
+        # Tabla de asociaciones IP -> MAC conocidas (baseline)
         self.arp_table = {}
 
+        # Lista de IPs a monitorear activamente
+        self.known_ips = known_hosts or []
+
         # Contadores para deteccion de anomalias
-        self.reply_count = defaultdict(int)     # Replies por IP origen
-        self.reply_timestamps = defaultdict(list)  # Timestamps de replies
-        self.alerts = []                        # Historial de alertas
+        self.reply_timestamps = defaultdict(list)
+        self.alerts = []
         self.pkt_count = 0
+        self.probe_count = 0
 
         # Umbral: mas de N replies en M segundos = sospechoso
         self.reply_threshold = 5
         self.time_window = 10  # segundos
+
+        # Control de ejecucion
+        self.running = True
 
         # Pre-cargar hosts conocidos si se proporcionan
         if known_hosts:
@@ -73,15 +92,19 @@ class ARPMonitor:
         """
         Resuelve las MACs reales de hosts conocidos via ARP Request.
         Esto establece la linea base legitima de la red.
+
+        Se envia un ARP Request broadcast por cada IP:
+          Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(op="who-has", pdst=ip)
+        Solo el host real con esa IP responde con su MAC verdadera.
         """
-        print(f"[*] Resolviendo MACs de {len(ip_list)} hosts conocidos...")
+        print(f"[*] Estableciendo baseline: resolviendo MACs de {len(ip_list)} hosts...")
         for ip in ip_list:
             pkt = Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(op="who-has", pdst=ip)
             result = srp(pkt, iface=self.iface, timeout=2, verbose=False)[0]
             if result:
                 mac = result[0][1].hwsrc
                 self.arp_table[ip] = mac
-                print(f"  [+] {ip} -> {mac}")
+                print(f"  [+] {ip} -> {mac} (baseline)")
             else:
                 print(f"  [-] {ip} -> No responde")
         print()
@@ -93,7 +116,6 @@ class ARPMonitor:
         if details:
             alert_msg += f"\n    Detalles: {details}"
 
-        # Colores para la terminal
         colors = {
             "CRITICO": "\033[91m",   # Rojo
             "ALERTA": "\033[93m",    # Amarillo
@@ -115,9 +137,111 @@ class ARPMonitor:
             except Exception:
                 pass
 
+    # ==================================================================
+    # MODO ACTIVO: ARP Polling
+    # ==================================================================
+    def active_probe(self):
+        """
+        Sondeo activo: envia ARP Requests a todos los hosts conocidos
+        y compara la MAC de respuesta con la baseline.
+
+        Tecnica: ARP Polling
+        =====================================================================
+        Para cada IP conocida:
+          1. Envia: Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(op="who-has", pdst=ip)
+          2. Recibe: ARP Reply con la MAC actual del host
+          3. Compara con self.arp_table[ip] (la MAC de la baseline)
+          4. Si difiere -> ALERTA: alguien esta respondiendo con otra MAC
+
+        Por que funciona:
+          - En una red con switch (o Docker bridge), el sniffer pasivo
+            no ve los ARP Replies unicast entre otros hosts
+          - Pero el sondeo activo GENERA trafico propio y recibe respuestas
+            directamente, sin importar la topologia
+          - Si hay un atacante haciendo ARP Spoofing, al preguntar por la
+            IP del gateway podemos recibir DOS respuestas: la real y la
+            del atacante (si el atacante responde a todos los requests)
+          - O la respuesta puede venir con la MAC del atacante si este
+            ha envenenado el gateway para que responda a traves de el
+        =====================================================================
+        """
+        self.probe_count += 1
+
+        for ip in self.known_ips:
+            if not self.running:
+                break
+
+            # Enviar ARP Request
+            pkt = Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(op="who-has", pdst=ip)
+            result = srp(pkt, iface=self.iface, timeout=1, verbose=False)[0]
+
+            if not result:
+                continue
+
+            # Verificar TODAS las respuestas (podrian llegar multiples)
+            responding_macs = set()
+            for sent, received in result:
+                responding_macs.add(received.hwsrc)
+
+            current_mac = list(responding_macs)[0]
+
+            # Deteccion: Multiples respuestas a un solo ARP Request
+            # Indica que hay dos hosts reclamando la misma IP
+            if len(responding_macs) > 1:
+                self._alert(
+                    "CRITICO",
+                    f"Multiples respuestas ARP para {ip}!",
+                    f"MACs respondiendo: {responding_macs} "
+                    f"(alguien esta suplantando esta IP)"
+                )
+
+            # Deteccion: MAC diferente a la baseline
+            if ip in self.arp_table:
+                baseline_mac = self.arp_table[ip]
+                if current_mac != baseline_mac:
+                    self._alert(
+                        "CRITICO",
+                        f"ARP SPOOFING DETECTADO! {ip} cambio de MAC",
+                        f"MAC baseline={baseline_mac}, MAC actual={current_mac}\n"
+                        f"    Alguien esta suplantando la IP {ip}"
+                    )
+
+        # Deteccion: Multiples IPs con la misma MAC (MITM clasico)
+        mac_to_ips = defaultdict(list)
+        for ip in self.known_ips:
+            if ip in self.arp_table:
+                # Resolver MAC actual (no baseline) para esta verificacion
+                pkt = Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(op="who-has", pdst=ip)
+                result = srp(pkt, iface=self.iface, timeout=1, verbose=False)[0]
+                if result:
+                    mac = result[0][1].hwsrc
+                    mac_to_ips[mac].append(ip)
+
+        for mac, ips in mac_to_ips.items():
+            if len(ips) > 1:
+                self._alert(
+                    "CRITICO",
+                    f"Multiples IPs con la misma MAC (MITM detectado)",
+                    f"MAC={mac}, IPs={ips}"
+                )
+
+    def run_active_probing(self):
+        """Ejecuta el sondeo activo en un bucle periodico."""
+        print(f"[*] Sondeo activo cada {self.probe_interval}s...")
+        while self.running:
+            self.active_probe()
+            # Mostrar estado
+            print(f"\r[*] Probe #{self.probe_count} | "
+                  f"Alertas: {len(self.alerts)} | "
+                  f"Hosts: {len(self.arp_table)}", end="", flush=True)
+            time.sleep(self.probe_interval)
+
+    # ==================================================================
+    # MODO PASIVO: Sniffing de ARP
+    # ==================================================================
     def process_packet(self, pkt):
         """
-        Analiza cada paquete ARP capturado.
+        Analiza cada paquete ARP capturado (modo pasivo).
 
         Campos ARP relevantes:
         =====================================================================
@@ -137,17 +261,12 @@ class ARPMonitor:
         arp = pkt[ARP]
 
         # Solo analizar ARP Replies (op=2, is-at)
-        # Los Replies son los que pueden envenenar tablas ARP
-        if arp.op == 2:  # is-at (ARP Reply)
-            src_ip = arp.psrc     # IP que dice tener
-            src_mac = arp.hwsrc   # MAC que dice ser
-            eth_src = pkt[Ether].src  # MAC real del header Ethernet
+        if arp.op == 2:
+            src_ip = arp.psrc
+            src_mac = arp.hwsrc
+            eth_src = pkt[Ether].src
 
-            # ============================================================
             # Deteccion 1: MAC inconsistente entre ARP y Ethernet
-            # ============================================================
-            # Si la MAC en el campo ARP no coincide con la del header
-            # Ethernet, alguien esta manipulando los paquetes
             if src_mac != eth_src:
                 self._alert(
                     "CRITICO",
@@ -155,11 +274,7 @@ class ARPMonitor:
                     f"IP={src_ip}, ARP.hwsrc={src_mac}, Ether.src={eth_src}"
                 )
 
-            # ============================================================
-            # Deteccion 2: IP cambio de MAC (ARP Cache Poisoning)
-            # ============================================================
-            # Si ya conocemos la MAC de esta IP y ahora es diferente,
-            # alguien esta intentando suplantar esa IP
+            # Deteccion 2: IP cambio de MAC
             if src_ip in self.arp_table:
                 known_mac = self.arp_table[src_ip]
                 if src_mac != known_mac:
@@ -168,39 +283,27 @@ class ARPMonitor:
                         f"ARP SPOOFING DETECTADO! IP {src_ip} cambio de MAC",
                         f"MAC legitima={known_mac}, MAC atacante={src_mac}"
                     )
-                    return  # No actualizar la tabla con MAC falsa
+                    return
             else:
-                # Primera vez que vemos esta IP, registrar como legitima
                 self.arp_table[src_ip] = src_mac
                 print(f"[+] Nueva entrada ARP: {src_ip} -> {src_mac}")
 
-            # ============================================================
-            # Deteccion 3: Rafaga de ARP Replies (comportamiento de ataque)
-            # ============================================================
-            # Un atacante de ARP Spoofing envia replies constantemente
-            # para mantener las tablas ARP envenenadas
+            # Deteccion 3: Rafaga de ARP Replies
             now = time.time()
             self.reply_timestamps[src_ip].append(now)
-
-            # Limpiar timestamps antiguos (fuera de la ventana)
             self.reply_timestamps[src_ip] = [
                 t for t in self.reply_timestamps[src_ip]
                 if now - t < self.time_window
             ]
-
             count = len(self.reply_timestamps[src_ip])
             if count >= self.reply_threshold:
                 self._alert(
                     "ALERTA",
                     f"Rafaga de ARP Replies desde {src_ip}",
-                    f"{count} replies en {self.time_window}s (umbral={self.reply_threshold})"
+                    f"{count} replies en {self.time_window}s"
                 )
 
-            # ============================================================
-            # Deteccion 4: Multiples IPs con la misma MAC (MITM)
-            # ============================================================
-            # Si el atacante suplanta multiples hosts, varias IPs
-            # apuntaran a su MAC
+            # Deteccion 4: Multiples IPs con la misma MAC
             ips_with_same_mac = [
                 ip for ip, mac in self.arp_table.items()
                 if mac == src_mac and ip != src_ip
@@ -212,11 +315,10 @@ class ARPMonitor:
                     f"MAC={src_mac}, IPs={[src_ip] + ips_with_same_mac}"
                 )
 
-        # Mostrar estado periodico
         if self.pkt_count % 20 == 0:
-            print(f"\r[*] Paquetes ARP procesados: {self.pkt_count} | "
+            print(f"\r[*] Paquetes ARP: {self.pkt_count} | "
                   f"Alertas: {len(self.alerts)} | "
-                  f"Hosts conocidos: {len(self.arp_table)}", end="", flush=True)
+                  f"Hosts: {len(self.arp_table)}", end="", flush=True)
 
     def print_summary(self):
         """Muestra resumen del monitoreo."""
@@ -224,11 +326,12 @@ class ARPMonitor:
         print(f"  Resumen de Monitoreo ARP")
         print(f"{'='*60}")
         print(f"  Paquetes ARP procesados: {self.pkt_count}")
-        print(f"  Hosts detectados:        {len(self.arp_table)}")
+        print(f"  Sondeos activos:         {self.probe_count}")
+        print(f"  Hosts en baseline:       {len(self.arp_table)}")
         print(f"  Alertas generadas:       {len(self.alerts)}")
 
         if self.arp_table:
-            print(f"\n  Tabla ARP conocida:")
+            print(f"\n  Tabla ARP baseline:")
             for ip, mac in sorted(self.arp_table.items()):
                 print(f"    {ip:>15} -> {mac}")
 
@@ -236,6 +339,8 @@ class ARPMonitor:
             print(f"\n  Alertas:")
             for alert in self.alerts:
                 print(f"    {alert}")
+        else:
+            print(f"\n  No se detectaron anomalias ARP.")
 
         print(f"{'='*60}")
 
@@ -246,11 +351,14 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Ejemplos:
-  # Monitoreo basico
-  python3 arp_monitor.py
-
-  # Con hosts conocidos del lab
+  # Monitoreo activo (recomendado)
   python3 arp_monitor.py --known 172.20.0.2 172.20.0.10 172.20.0.11 172.20.0.12
+
+  # Monitoreo pasivo
+  python3 arp_monitor.py --passive --known 172.20.0.2 172.20.0.10
+
+  # Intervalo de sondeo personalizado
+  python3 arp_monitor.py --known 172.20.0.2 172.20.0.10 --probe-interval 3
 
   # Guardar alertas
   python3 arp_monitor.py -o /logs/arp_alerts.log --known 172.20.0.2 172.20.0.10
@@ -264,37 +372,84 @@ Ejemplos:
                         help="Archivo para guardar alertas")
     parser.add_argument("--timeout", type=int, default=0,
                         help="Tiempo de monitoreo en segundos (0 = indefinido)")
+    parser.add_argument("--passive", action="store_true",
+                        help="Modo pasivo: solo escuchar (sin sondeo activo)")
+    parser.add_argument("--probe-interval", type=int, default=5,
+                        help="Intervalo de sondeo activo en segundos (default: 5)")
     args = parser.parse_args()
+
+    mode = "Pasivo (sniffing)" if args.passive else "Activo (ARP polling)"
 
     print("=" * 60)
     print("  ARP Monitor - Deteccion de ARP Spoofing")
     print("=" * 60)
     print(f"  Interface:  {args.interface}")
+    print(f"  Modo:       {mode}")
     print(f"  Hosts:      {args.known or 'Deteccion automatica'}")
     print(f"  Output:     {args.output or 'Solo consola'}")
+    if not args.passive:
+        print(f"  Probe int:  {args.probe_interval}s")
     print("=" * 60)
 
     monitor = ARPMonitor(
         iface=args.interface,
         known_hosts=args.known,
-        output_file=args.output
+        output_file=args.output,
+        probe_interval=args.probe_interval
     )
 
-    print(f"\n[*] Monitoreando trafico ARP... (Ctrl+C para detener)\n")
+    # Manejar señales para salida limpia
+    def signal_handler(sig, frame):
+        monitor.running = False
 
-    try:
-        sniff(
-            iface=args.interface,
-            filter="arp",
-            prn=monitor.process_packet,
-            store=False,
-            timeout=args.timeout if args.timeout > 0 else None
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    if args.passive:
+        # Modo pasivo: solo sniffing
+        print(f"\n[*] Modo pasivo: escuchando trafico ARP... (Ctrl+C para detener)\n")
+        try:
+            sniff(
+                iface=args.interface,
+                filter="arp",
+                prn=monitor.process_packet,
+                store=False,
+                timeout=args.timeout if args.timeout > 0 else None
+            )
+        except KeyboardInterrupt:
+            pass
+    else:
+        # Modo activo: sondeo periodico + sniffing en background
+        print(f"\n[*] Modo activo: sondeando hosts cada {args.probe_interval}s... "
+              f"(Ctrl+C para detener)\n")
+
+        # Sniffing pasivo en hilo de background (captura lo que pueda)
+        sniffer_thread = threading.Thread(
+            target=lambda: sniff(
+                iface=args.interface,
+                filter="arp",
+                prn=monitor.process_packet,
+                store=False,
+                stop_filter=lambda x: not monitor.running,
+                timeout=args.timeout if args.timeout > 0 else None
+            ),
+            daemon=True
         )
-    except KeyboardInterrupt:
-        pass
-    except PermissionError:
-        print("[!] Error: Se requieren privilegios root")
-        sys.exit(1)
+        sniffer_thread.start()
+
+        # Sondeo activo en hilo principal
+        try:
+            start = time.time()
+            while monitor.running:
+                if args.timeout > 0 and (time.time() - start) >= args.timeout:
+                    break
+                monitor.active_probe()
+                print(f"\r[*] Probe #{monitor.probe_count} | "
+                      f"Alertas: {len(monitor.alerts)} | "
+                      f"Hosts: {len(monitor.arp_table)}", end="", flush=True)
+                time.sleep(args.probe_interval)
+        except KeyboardInterrupt:
+            monitor.running = False
 
     monitor.print_summary()
 

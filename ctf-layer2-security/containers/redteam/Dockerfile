@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     arping \
     nmap \
+    procps \
     && rm -rf /var/lib/apt/lists/*
 
 # Directorio para scripts ofensivos

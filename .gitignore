@@ -53,5 +53,9 @@ containers/wazuh/certs/
 **/certs/*.pem
 **/certs/*.key
 
+# ===== Evidencia de ejecuciones CTF =====
+evidence_*/
+**/evidence_*/
+
 # ===== Volumes y datos de Docker =====
 ctfd-db-data/

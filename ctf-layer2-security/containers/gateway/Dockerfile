@@ -10,7 +10,8 @@ RUN apk add --no-cache \
     iptables \
     tcpdump \
     net-tools \
-    bash
+    bash \
+    python3
 
 # Script de inicio que configura el gateway
 COPY entrypoint.sh /entrypoint.sh

