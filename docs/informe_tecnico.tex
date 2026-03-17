@@ -13,6 +13,7 @@
 \usepackage[spanish]{babel}
 \usepackage{geometry}
 \usepackage{graphicx}
+\graphicspath{{../ctf-layer2-security/screenshots/}}
 \usepackage{fancyhdr}
 \usepackage{titlesec}
 \usepackage{hyperref}
@@ -650,11 +651,11 @@ Cada flag sigue el formato \texttt{FLAG\{descripcion\_legible\}} y est\'a integr
         \hline
         \textbf{Servicio} & \textbf{Flag} & \textbf{Ubicaci\'on} \\
         \hline\hline
-        Victim1 & \texttt{FLAG\{hidden\_in\_html\}} & Comentario HTML en la p\'agina web \\
+        Victim1 & \texttt{FLAG\{arp\_spoof\_mitm\_captured\}} & Comentario HTML en la p\'agina web \\
         \hline
-        Victim2 & \texttt{FLAG\{leaked\_credentials\}} & Archivo \texttt{/backup/db\_credentials.txt} \\
+        Victim2 & \texttt{FLAG\{mac\_flood\_broadcast\_leak\}} & Archivo \texttt{/backup/db\_credentials.txt} \\
         \hline
-        Victim3 & \texttt{FLAG\{intercepted\_token\}} & Campo \texttt{auth\_token} en POST HTTP \\
+        Victim3 & \texttt{FLAG\{plaintext\_credentials\_exposed\}} & Campo \texttt{auth\_token} en POST HTTP \\
         \hline
     \end{tabularx}
 \end{table}
@@ -1085,11 +1086,11 @@ Con el MITM establecido, el Red Team captur\'o las 3 flags de los servicios vuln
         \hline
         \textbf{\#} & \textbf{Flag} & \textbf{Puntos} & \textbf{M\'etodo de Captura} \\
         \hline\hline
-        1 & \texttt{FLAG\{hidden\_in\_html\}} & 100 & Inspecci\'on de c\'odigo fuente HTTP \\
+        1 & \texttt{FLAG\{arp\_spoof\_mitm\_captured\}} & 100 & Inspecci\'on de c\'odigo fuente HTTP \\
         \hline
-        2 & \texttt{FLAG\{leaked\_credentials\}} & 150 & Acceso a archivo de backup v\'ia HTTP \\
+        2 & \texttt{FLAG\{mac\_flood\_broadcast\_leak\}} & 150 & Acceso a archivo de backup v\'ia HTTP \\
         \hline
-        3 & \texttt{FLAG\{intercepted\_token\}} & 200 & Interceptaci\'on de POST HTTP (MITM) \\
+        3 & \texttt{FLAG\{plaintext\_credentials\_exposed\}} & 200 & Interceptaci\'on de POST HTTP (MITM) \\
         \hline
     \end{tabularx}
 \end{table}
@@ -1204,6 +1205,42 @@ Las alertas de Suricata confirman dos hallazgos cr\'iticos de seguridad:
     \item El tr\'afico HTTP sin cifrar expone informaci\'on sensible (flags, credenciales) que es f\'acilmente detectada por un NIDS.
 \end{enumerate}
 
+\subsection{Evidencia Visual}
+
+Las siguientes capturas de pantalla documentan los resultados obtenidos durante la ejecuci\'on del laboratorio.
+
+\subsubsection{Wazuh SIEM Dashboard}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{woverview.png}
+    \caption{Panel principal de Wazuh mostrando el resumen de alertas: 92 de severidad media y 388 de severidad baja generadas durante la ejecuci\'on del CTF.}
+    \label{fig:wazuh-overview}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{wthreathunting.png}
+    \caption{M\'odulo Threat Hunting de Wazuh con 68 alertas de Suricata filtradas. El histograma muestra el pico de actividad durante la ejecuci\'on de los ataques.}
+    \label{fig:wazuh-threathunting}
+\end{figure}
+
+\subsubsection{An\'alisis de Tr\'afico en Wireshark}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{arpspoofing.png}
+    \caption{Captura de Wireshark filtrada por ARP Replies del atacante (\texttt{02:42:ac:14:00:64}). Se observan m\'ultiples ARP Replies broadcast suplantando la IP del gateway (172.20.0.2), confirmando el ataque de ARP Spoofing.}
+    \label{fig:wireshark-arp}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{macflooding.png}
+    \caption{Captura de Wireshark mostrando ARP Requests masivos con direcciones MAC aleatorias, caracter\'istico del ataque de MAC Flooding. Se observan MACs con el bit localmente administrado activado.}
+    \label{fig:wireshark-macflood}
+\end{figure}
+
 \subsection{Resumen de Resultados}
 
 \begin{table}[H]
@@ -1228,7 +1265,7 @@ Las alertas de Suricata confirman dos hallazgos cr\'iticos de seguridad:
         \hline
         Alertas Suricata & 90 alertas & Exitoso \\
         \hline
-        Integraci\'on Wazuh & Dashboard operativo & Exitoso \\
+        Integraci\'on Wazuh & 480+ alertas en dashboard & Exitoso \\
         \hline
         Plataforma CTFd & 6 desaf\'ios activos & Exitoso \\
         \hline

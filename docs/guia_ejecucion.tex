@@ -6,12 +6,14 @@
 \usepackage[spanish]{babel}
 \usepackage{geometry}
 \usepackage{graphicx}
+\graphicspath{{../ctf-layer2-security/screenshots/}}
 \usepackage{hyperref}
 \usepackage{listings}
 \usepackage{xcolor}
 \usepackage{booktabs}
 \usepackage{enumitem}
 \usepackage{fancyhdr}
+\usepackage{float}
 \usepackage{titlesec}
 \usepackage{parskip}
 
@@ -296,6 +298,57 @@ Este script tarda aproximadamente \textbf{2 minutos} y realiza lo siguiente:
         \item Contrase\~na: \texttt{SecretPassword}
     \end{itemize}
 \end{itemize}
+
+\subsection{Paso 10: Verificar alertas en Wazuh Dashboard}
+
+\begin{enumerate}
+    \item Abrir \url{https://localhost:5601} en el navegador.
+    \item Ingresar credenciales: \texttt{admin} / \texttt{SecretPassword}.
+    \item En el panel principal (Overview) se ver\'an las alertas clasificadas por severidad.
+    \item Ir a \textbf{Threat Hunting} en el men\'u lateral.
+    \item En la barra de b\'usqueda escribir \texttt{suricata} para filtrar las alertas del NIDS.
+    \item Se deber\'ian ver las alertas de flags en texto plano y credenciales detectadas.
+\end{enumerate}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{woverview.png}
+    \caption{Panel Overview de Wazuh con alertas generadas durante el CTF.}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{wthreathunting.png}
+    \caption{M\'odulo Threat Hunting filtrando alertas de Suricata.}
+\end{figure}
+
+\subsection{Paso 11: Analizar capturas en Wireshark}
+
+Abrir la captura de tr\'afico generada:
+
+\begin{lstlisting}
+sudo wireshark evidence_*/captura_ctf.pcap
+\end{lstlisting}
+
+Filtros \'utiles en Wireshark:
+
+\begin{itemize}
+    \item \textbf{Ver ARP Spoofing:} \texttt{arp.opcode == 2 \&\& arp.src.hw\_mac == 02:42:ac:14:00:64}
+    \item \textbf{Ver MAC Flooding:} \texttt{arp.opcode == 1} (buscar MACs aleatorias al final de la captura)
+    \item \textbf{Ver todo el ARP:} \texttt{arp}
+\end{itemize}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{arpspoofing.png}
+    \caption{ARP Replies falsos del atacante suplantando el gateway.}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{macflooding.png}
+    \caption{ARP Requests masivos con MACs aleatorias (MAC Flooding).}
+\end{figure}
 
 % ======================================================================
 \section{Ejecuci\'on Manual (Modo Interactivo)}
