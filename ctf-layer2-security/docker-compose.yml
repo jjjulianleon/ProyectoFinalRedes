@@ -254,6 +254,8 @@ services:
       - ./containers/wazuh/certs/root-ca.pem:/etc/ssl/root-ca.pem:ro
       - ./containers/wazuh/certs/wazuh.manager.pem:/etc/ssl/filebeat.pem:ro
       - ./containers/wazuh/certs/wazuh.manager-key.pem:/etc/ssl/filebeat.key:ro
+      # Logs de Suricata montados para integracion NIDS -> SIEM
+      - suricata-logs:/var/ossec/logs/suricata:ro
     networks:
       ctf-network:
         ipv4_address: 172.20.0.240
@@ -303,14 +305,13 @@ services:
   suricata:
     build: ./containers/suricata
     container_name: suricata
-    hostname: suricata
+    # Comparte la red del gateway para ver TODO el trafico que pasa por el
+    # Esto simula un NIDS conectado al puerto SPAN/mirror del switch
+    network_mode: "service:gateway"
     cap_add:
       - NET_ADMIN
       - NET_RAW
       - SYS_NICE            # Necesario para AF_PACKET
-    networks:
-      ctf-network:
-        ipv4_address: 172.20.0.230
     volumes:
       - suricata-logs:/var/log/suricata
     depends_on:

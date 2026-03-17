@@ -2,56 +2,58 @@
 # Reglas Suricata Custom - Deteccion de Ataques de Capa 2
 # CTF Layer 2 Security - ARP Spoofing & MAC Flooding
 #
-# SINTAXIS DE REGLAS SURICATA:
-# action proto src_ip src_port -> dst_ip dst_port (opciones)
+# NOTA: Suricata no soporta "arp" como protocolo en reglas.
+# Para detectar ARP a nivel de capa 2, usamos "pkthdr" con content matching
+# sobre los bytes raw del frame Ethernet + ARP.
 #
-# Opciones principales:
-#   msg       : Mensaje de la alerta
-#   sid       : ID unico de la regla (custom: 1000000+)
-#   rev       : Revision de la regla
-#   classtype : Tipo de ataque (misc-attack, bad-unknown, etc)
-#   threshold : Umbral para generar alerta (count, seconds, track)
-#
-# Para reglas ARP usamos el tipo de protocolo "arp" (Suricata soporta
-# inspeccion de paquetes ARP desde la version 7.0+)
+# Estructura de un frame ARP sobre Ethernet:
+#   Bytes 0-5:   Destination MAC
+#   Bytes 6-11:  Source MAC
+#   Bytes 12-13: EtherType (0x0806 = ARP)
+#   Bytes 14-15: Hardware type (0x0001 = Ethernet)
+#   Bytes 16-17: Protocol type (0x0800 = IPv4)
+#   Byte  18:    Hardware address length (6)
+#   Byte  19:    Protocol address length (4)
+#   Bytes 20-21: Operation (0x0001=Request, 0x0002=Reply)
+#   Bytes 22-27: Sender MAC
+#   Bytes 28-31: Sender IP
+#   Bytes 32-37: Target MAC
+#   Bytes 38-41: Target IP
 # ============================================================================
 
 # === DETECCION DE ARP SPOOFING ===
 
-# Regla 1000001: Detecta ARP Reply no solicitado (Gratuitous ARP)
-# Un gratuitous ARP es cuando un host envia un ARP reply sin que nadie
-# haya preguntado. Es la tecnica principal de ARP Spoofing:
-# el atacante envia replies falsos para asociar su MAC con la IP del gateway.
-alert arp any any -> any any (msg:"CTF - ARP Reply detectado (posible ARP Spoofing)"; arp_opcode:2; sid:1000001; rev:1; classtype:misc-attack;)
+# Regla 1000001: Detecta ARP Reply (opcode 2)
+# Un ARP Reply broadcast es sospechoso (normalmente son unicast).
+# El atacante usa broadcast para envenenar a toda la red.
+alert pkthdr any any -> any any (msg:"CTF - ARP Reply detectado (posible ARP Spoofing)"; content:"|08 06|"; offset:12; depth:2; content:"|00 02|"; offset:20; depth:2; sid:1000001; rev:2; classtype:misc-attack;)
 
-# Regla 1000002: Detecta alto volumen de ARP Replies en poco tiempo
-# Durante un ataque ARP Spoofing activo, el atacante envia replies
-# continuamente para mantener las tablas ARP envenenadas.
-# Umbral: mas de 10 ARP replies en 5 segundos desde la misma IP
-alert arp any any -> any any (msg:"CTF - ALERTA: Alto volumen de ARP Replies - ARP Spoofing en progreso"; arp_opcode:2; threshold:type both, track by_src, count 10, seconds 5; sid:1000002; rev:1; classtype:misc-attack;)
+# Regla 1000002: Detecta alto volumen de ARP Replies
+# Durante ARP Spoofing activo, el atacante envia replies constantemente.
+# Umbral: mas de 10 en 5 segundos
+alert pkthdr any any -> any any (msg:"CTF - ALERTA: Alto volumen de ARP Replies - ARP Spoofing en progreso"; content:"|08 06|"; offset:12; depth:2; content:"|00 02|"; offset:20; depth:2; threshold:type both, track by_src, count 10, seconds 5; sid:1000002; rev:2; classtype:misc-attack;)
 
-# Regla 1000003: Detecta ARP Reply donde la IP origen es la del gateway
-# Si alguien que NO es el gateway real responde ARP con la IP del gateway,
-# es un indicador claro de suplantacion (MITM)
-alert arp any any -> any any (msg:"CTF - CRITICO: ARP Reply suplantando IP del Gateway (172.20.0.2)"; arp_opcode:2; content:"|ac 14 00 02|"; offset:14; depth:4; sid:1000003; rev:1; classtype:misc-attack;)
+# Regla 1000003: Detecta ARP Reply con IP del gateway (172.20.0.2 = ac.14.00.02)
+# Si alguien que NO es el gateway envia un ARP Reply diciendo ser 172.20.0.2,
+# es ARP Spoofing. La IP del gateway esta en sender IP (bytes 28-31).
+alert pkthdr any any -> any any (msg:"CTF - CRITICO: ARP Reply suplantando IP del Gateway (172.20.0.2)"; content:"|08 06|"; offset:12; depth:2; content:"|00 02|"; offset:20; depth:2; content:"|ac 14 00 02|"; offset:28; depth:4; sid:1000003; rev:2; classtype:misc-attack;)
 
 # === DETECCION DE MAC FLOODING ===
 
-# Regla 1000010: Detecta volumen anomalo de tramas con MACs unicas
-# MAC Flooding genera miles de tramas con MACs de origen aleatorias
-# para desbordar la tabla CAM del switch.
-# Umbral: mas de 50 paquetes ARP en 3 segundos (anomalo para nuestra red)
-alert arp any any -> any any (msg:"CTF - ALERTA: Volumen anomalo de paquetes ARP - posible MAC Flooding"; threshold:type both, track by_src, count 50, seconds 3; sid:1000010; rev:1; classtype:misc-attack;)
+# Regla 1000010: Detecta volumen anomalo de ARP Requests
+# MAC Flooding genera miles de ARP Requests con MACs aleatorias.
+# Umbral: mas de 50 paquetes ARP en 3 segundos
+alert pkthdr any any -> any any (msg:"CTF - ALERTA: Volumen anomalo de paquetes ARP - posible MAC Flooding"; content:"|08 06|"; offset:12; depth:2; threshold:type both, track by_src, count 50, seconds 3; sid:1000010; rev:2; classtype:misc-attack;)
 
-# === DETECCION DE TRAFICO SOSPECHOSO ===
+# === DETECCION DE TRAFICO SOSPECHOSO (HTTP) ===
 
-# Regla 1000020: Detecta trafico HTTP con contenido de flags
-# Si una flag transita por la red en texto plano, Suricata la detecta
+# Regla 1000020: Detecta flags del CTF transitando en texto plano
+# Si una flag viaja por HTTP sin cifrar, Suricata la detecta
 alert http any any -> any any (msg:"CTF - Flag detectada en trafico HTTP"; content:"FLAG{"; nocase; sid:1000020; rev:1; classtype:bad-unknown;)
 
-# Regla 1000021: Detecta el reporte periodico de victim3 al gateway
-# El agente de monitoreo envia reportes con auth_token en texto plano
-alert http any any -> 172.20.0.2 any (msg:"CTF - Reporte con credenciales en texto plano detectado"; content:"auth_token="; nocase; sid:1000021; rev:1; classtype:bad-unknown;)
+# Regla 1000021: Detecta credenciales/tokens en texto plano
+# El agente de monitoreo (victim3) envia auth_token al gateway via HTTP POST
+alert http any any -> any any (msg:"CTF - Credenciales en texto plano detectadas (auth_token)"; content:"auth_token="; nocase; sid:1000021; rev:1; classtype:bad-unknown;)
 
-# Regla 1000022: Detecta escaneo de red (multiples conexiones HTTP)
-alert http any any -> 172.20.0.0/24 80 (msg:"CTF - Escaneo HTTP a multiples hosts"; threshold:type both, track by_src, count 5, seconds 10; sid:1000022; rev:1; classtype:misc-attack;)
+# Regla 1000022: Detecta acceso a archivos de credenciales
+alert http any any -> any any (msg:"CTF - Acceso a archivo de credenciales (db_credentials)"; content:"db_credentials"; nocase; sid:1000022; rev:1; classtype:bad-unknown;)
