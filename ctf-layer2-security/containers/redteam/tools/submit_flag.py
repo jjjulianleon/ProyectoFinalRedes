@@ -33,7 +33,9 @@ REQUISITOS:
 """
 
 import argparse
+import http.cookiejar
 import json
+import re
 import sys
 
 # Usar urllib para evitar dependencia externa (requests no esta en redteam)
@@ -48,32 +50,29 @@ class CTFdClient:
 
     def __init__(self, base_url, token=None):
         self.base_url = base_url.rstrip("/")
-        self.session = None
         self.nonce = None
         self.token = token
+        # CookieJar maneja cookies automaticamente en redirects
+        self._jar = http.cookiejar.CookieJar()
+        self._opener = request.build_opener(
+            request.HTTPCookieProcessor(self._jar)
+        )
 
     def _api_request(self, method, endpoint, data=None):
-        """
-        Realiza una peticion a la API de CTFd.
-
-        CTFd ofrece dos modos de autenticacion:
-        1. Token de API (Header: Authorization: Token <token>)
-        2. Cookie de sesion (tras login con usuario/password)
-        """
+        """Realiza una peticion a la API de CTFd."""
         url = f"{self.base_url}{endpoint}"
         headers = {"Content-Type": "application/json"}
 
         if self.token:
             headers["Authorization"] = f"Token {self.token}"
+        if self.nonce:
+            headers["CSRF-Token"] = self.nonce
 
         body = json.dumps(data).encode("utf-8") if data else None
         req = request.Request(url, data=body, headers=headers, method=method)
 
-        if self.session:
-            req.add_header("Cookie", self.session)
-
         try:
-            with request.urlopen(req) as resp:
+            with self._opener.open(req) as resp:
                 return json.loads(resp.read().decode())
         except error.HTTPError as e:
             body = e.read().decode()
@@ -84,34 +83,21 @@ class CTFdClient:
                 return None
 
     def login(self, username, password):
-        """
-        Inicia sesion en CTFd y obtiene cookie de sesion + nonce CSRF.
-
-        CTFd usa sesiones basadas en cookies para usuarios normales.
-        Para automatizacion, es preferible usar tokens de API.
-        """
-        # Obtener nonce del formulario de login
+        """Inicia sesion en CTFd usando cookie jar para manejar redirects."""
+        login_url = f"{self.base_url}/login"
         try:
-            login_url = f"{self.base_url}/login"
+            # GET /login para obtener nonce y cookie de sesion inicial
             req = request.Request(login_url)
-            with request.urlopen(req) as resp:
+            with self._opener.open(req) as resp:
                 html = resp.read().decode()
-                # Extraer nonce CSRF
-                import re
-                nonce_match = re.search(r'name="nonce"\s+value="([^"]+)"', html)
+                nonce_match = re.search(r'name="nonce"[^>]+value="([^"]+)"', html)
                 if nonce_match:
                     self.nonce = nonce_match.group(1)
-                # Guardar cookie de sesion
-                cookies = resp.headers.get_all("Set-Cookie")
-                if cookies:
-                    self.session = "; ".join(
-                        c.split(";")[0] for c in cookies
-                    )
         except Exception as e:
             print(f"[!] Error obteniendo pagina de login: {e}")
             return False
 
-        # Enviar credenciales
+        # POST /login con credenciales y nonce
         login_data = parse.urlencode({
             "name": username,
             "password": password,
@@ -120,31 +106,20 @@ class CTFdClient:
 
         try:
             req = request.Request(
-                f"{self.base_url}/login",
+                login_url,
                 data=login_data,
-                method="POST"
+                method="POST",
+                headers={"Content-Type": "application/x-www-form-urlencoded"}
             )
-            req.add_header("Content-Type", "application/x-www-form-urlencoded")
-            if self.session:
-                req.add_header("Cookie", self.session)
-
-            with request.urlopen(req) as resp:
-                cookies = resp.headers.get_all("Set-Cookie")
-                if cookies:
-                    self.session = "; ".join(
-                        c.split(";")[0] for c in cookies
-                    )
+            with self._opener.open(req) as resp:
+                # Actualizar nonce desde la pagina post-login
+                html = resp.read().decode()
+                nonce_match = re.search(r"'csrfNonce':\s*\"([^\"]+)\"", html)
+                if nonce_match:
+                    self.nonce = nonce_match.group(1)
                 print(f"[+] Login exitoso como '{username}'")
                 return True
         except error.HTTPError as e:
-            if e.code == 302 or e.code == 301:
-                cookies = e.headers.get_all("Set-Cookie")
-                if cookies:
-                    self.session = "; ".join(
-                        c.split(";")[0] for c in cookies
-                    )
-                print(f"[+] Login exitoso como '{username}'")
-                return True
             print(f"[!] Login fallido: HTTP {e.code}")
             return False
 
