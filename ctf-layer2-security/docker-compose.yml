@@ -37,11 +37,13 @@ services:
     environment:
       - VICTIM_ID=1
       - FLAG=${FLAG1}
+      - WAZUH_MANAGER_IP=172.20.0.240
     networks:
       ctf-network:
         ipv4_address: 172.20.0.10
     depends_on:
       - gateway
+      - wazuh-manager
     restart: unless-stopped
 
   victim2:
@@ -54,11 +56,13 @@ services:
     environment:
       - VICTIM_ID=2
       - FLAG=${FLAG2}
+      - WAZUH_MANAGER_IP=172.20.0.240
     networks:
       ctf-network:
         ipv4_address: 172.20.0.11
     depends_on:
       - gateway
+      - wazuh-manager
     restart: unless-stopped
 
   victim3:
@@ -72,11 +76,13 @@ services:
       - VICTIM_ID=3
       - FLAG=${FLAG3}
       - GATEWAY_IP=172.20.0.2
+      - WAZUH_MANAGER_IP=172.20.0.240
     networks:
       ctf-network:
         ipv4_address: 172.20.0.12
     depends_on:
       - gateway
+      - wazuh-manager
     restart: unless-stopped
 
   # =========================================================================
@@ -95,6 +101,8 @@ services:
       - NET_RAW            # Enviar/recibir paquetes raw (Scapy necesita esto)
     sysctls:
       - net.ipv4.ip_forward=1   # Necesario para MITM (reenviar paquetes interceptados)
+    environment:
+      - WAZUH_MANAGER_IP=172.20.0.240
     networks:
       ctf-network:
         ipv4_address: 172.20.0.100
@@ -103,6 +111,7 @@ services:
       - victim1
       - victim2
       - victim3
+      - wazuh-manager
     restart: unless-stopped
 
   # =========================================================================
@@ -118,6 +127,8 @@ services:
     cap_add:
       - NET_ADMIN
       - NET_RAW
+    environment:
+      - WAZUH_MANAGER_IP=172.20.0.240
     networks:
       ctf-network:
         ipv4_address: 172.20.0.200
@@ -126,6 +137,7 @@ services:
       - victim1
       - victim2
       - victim3
+      - wazuh-manager
     restart: unless-stopped
 
   # =========================================================================

@@ -17,11 +17,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     procps \
     && rm -rf /var/lib/apt/lists/*
 
+# Instalar agente Wazuh HIDS 4.9.2
+RUN curl -sL https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_4.9.2-1_amd64.deb \
+      -o /tmp/wazuh-agent.deb \
+    && dpkg -i /tmp/wazuh-agent.deb || apt-get install -f -y \
+    && rm /tmp/wazuh-agent.deb
+
+# Sobrescribir config por defecto con la config del CTF
+COPY agent-ossec.conf /var/ossec/etc/ossec.conf
+
 # Directorio para scripts ofensivos
 RUN mkdir -p /tools /captures
 
 COPY tools/ /tools/
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 WORKDIR /tools
 
-# Mantener el contenedor corriendo
-CMD ["bash", "-c", "echo '[RedTeam] Listo para atacar.' && tail -f /dev/null"]
+ENTRYPOINT ["/entrypoint.sh"]
