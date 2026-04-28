@@ -161,7 +161,7 @@ docker exec redteam curl -s http://172.20.0.10 > "$EVIDENCE_DIR/victim1_response
 info "Respuesta guardada en victim1_response.html"
 
 # Extraer flag de victim1
-FLAG1=$(grep -oP 'FLAG\{[^}]+\}' "$EVIDENCE_DIR/victim1_response.html" 2>/dev/null || echo "NO ENCONTRADA")
+FLAG1=$(grep -oP 'FLAG\{[^}]+\}' "$EVIDENCE_DIR/victim1_response.html" 2>/dev/null | head -1 || echo "NO ENCONTRADA")
 echo -e "  ${GREEN}${BOLD}  Flag 1: $FLAG1${NC}"
 submit_flag "$FLAG1" 1 "Hidden in Plain Sight"
 
@@ -176,7 +176,7 @@ step "Descargando archivo de credenciales de victim2..."
 docker exec redteam curl -s http://172.20.0.11/backup/db_credentials.txt > "$EVIDENCE_DIR/victim2_credentials.txt"
 info "Credenciales guardadas en victim2_credentials.txt"
 
-FLAG2=$(grep -oP 'FLAG\{[^}]+\}' "$EVIDENCE_DIR/victim2_credentials.txt" 2>/dev/null || echo "NO ENCONTRADA")
+FLAG2=$(grep -oP 'FLAG\{[^}]+\}' "$EVIDENCE_DIR/victim2_credentials.txt" 2>/dev/null | head -1 || echo "NO ENCONTRADA")
 echo -e "  ${GREEN}${BOLD}  Flag 2: $FLAG2${NC}"
 submit_flag "$FLAG2" 2 "Leaked Credentials"
 
@@ -191,7 +191,7 @@ docker exec redteam timeout 25 tcpdump -i eth0 -A 'src host 172.20.0.12 and dst 
     > "$EVIDENCE_DIR/victim3_traffic.txt" 2>/dev/null || true
 info "Tráfico capturado en victim3_traffic.txt"
 
-FLAG3=$(grep -oP 'FLAG\{[^}]+\}' "$EVIDENCE_DIR/victim3_traffic.txt" 2>/dev/null || echo "NO ENCONTRADA")
+FLAG3=$(grep -oP 'FLAG\{[^}]+\}' "$EVIDENCE_DIR/victim3_traffic.txt" 2>/dev/null | head -1 || echo "NO ENCONTRADA")
 echo -e "  ${GREEN}${BOLD}  Flag 3: $FLAG3${NC}"
 submit_flag "$FLAG3" 3 "Intercept the Report"
 
