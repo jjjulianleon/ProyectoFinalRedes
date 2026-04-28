@@ -57,12 +57,18 @@ containers/wazuh/certs/
 evidence_*/
 **/evidence_*/
 
+# ===== Documentacion (generada localmente) =====
+docs/
+
 # ===== LaTeX auxiliares =====
 *.aux
 *.lof
 *.lot
 *.out
 *.toc
+*.nav
+*.snm
+*.vrb
 
 # ===== Volumes y datos de Docker =====
 ctfd-db-data/
