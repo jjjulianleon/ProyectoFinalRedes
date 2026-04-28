@@ -27,20 +27,32 @@ BOLD='\033[1m'
 EVIDENCE_DIR="$(pwd)/evidence_$(date +%Y%m%d_%H%M%S)"
 CTFD_USER="redteam"
 CTFD_PASS="redteam123"
+CTFD_BLUE_USER="blueteam"
+CTFD_BLUE_PASS="blueteam123"
 
+# Envía una flag al CTFd como usuario indicado
 submit_flag() {
     local flag="$1"
     local challenge_id="$2"
     local challenge_name="$3"
+    local user="${4:-$CTFD_USER}"
+    local pass="${5:-$CTFD_PASS}"
     if [ -z "$flag" ] || [ "$flag" = "NO ENCONTRADA" ]; then
         echo -e "  ${RED}[!] Flag no capturada — no se puede enviar al CTFd${NC}"
         return
     fi
-    echo -e "  ${CYAN}[CTFd] Enviando flag al challenge ${challenge_name} (id=${challenge_id})...${NC}"
+    echo -e "  ${CYAN}[CTFd] Enviando flag al challenge '${challenge_name}' como ${user}...${NC}"
     docker exec redteam python3 /tools/submit_flag.py \
         -f "$flag" -c "$challenge_id" \
-        -u "$CTFD_USER" -p "$CTFD_PASS" \
+        -u "$user" -p "$pass" \
         --url http://172.20.0.250:8000 2>&1 | sed 's/^/    /'
+}
+
+# Resetea todas las submissions y crea usuario blueteam si no existe
+ctfd_reset_and_setup() {
+    echo -e "  ${CYAN}[CTFd] Reseteando submissions anteriores...${NC}"
+    docker cp "$(pwd)/scripts/ctfd_reset.py" redteam:/tmp/ctfd_reset.py
+    docker exec redteam python3 /tmp/ctfd_reset.py
 }
 
 banner() {
@@ -87,6 +99,9 @@ if [ "$ALL_OK" = false ]; then
     echo -e "\n${RED}[!] Algunos contenedores no están corriendo. Abortando.${NC}"
     exit 1
 fi
+
+# Reset CTFd: limpiar submissions anteriores y asegurar usuario blueteam
+ctfd_reset_and_setup
 
 # Guardar estado inicial de tablas ARP
 step "Guardando tablas ARP iniciales (estado limpio)..."
@@ -202,7 +217,7 @@ docker exec redteam python3 /tools/mac_flood.py -c 2000 --delay 0.001 \
     > "$EVIDENCE_DIR/mac_flood_output.txt" 2>&1
 info "Resultado guardado en mac_flood_output.txt"
 cat "$EVIDENCE_DIR/mac_flood_output.txt" | tail -3
-submit_flag "FLAG{mac_flood_broadcast_leak}" 4 "Flood the Switch"
+submit_flag "FLAG{cam_table_overflow_success}" 4 "Flood the Switch"
 
 # ============================================================
 # FASE 6: Blue Team - Restauración
@@ -219,6 +234,11 @@ step "Guardando tablas ARP después de restauración..."
 docker exec victim1 arp -n > "$EVIDENCE_DIR/arp_victim1_despues.txt" 2>/dev/null || true
 docker exec victim2 arp -n > "$EVIDENCE_DIR/arp_victim2_despues.txt" 2>/dev/null || true
 docker exec victim3 arp -n > "$EVIDENCE_DIR/arp_victim3_despues.txt" 2>/dev/null || true
+
+# Blue Team submits: detectaron ARP Spoofing y MAC Flooding de redteam (172.20.0.100)
+step "Blue Team: Enviando flags de detección al CTFd..."
+submit_flag "FLAG{detected_arp_spoof_172.20.0.100}" 5 "Blue Team - Detect ARP Spoofing" "$CTFD_BLUE_USER" "$CTFD_BLUE_PASS"
+submit_flag "FLAG{mac_flood_detected_from_172.20.0.100}" 6 "Blue Team - Detect MAC Flooding" "$CTFD_BLUE_USER" "$CTFD_BLUE_PASS"
 
 # ============================================================
 # FASE 7: Recolección de Evidencia
