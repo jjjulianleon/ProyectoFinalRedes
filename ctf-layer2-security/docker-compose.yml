@@ -277,6 +277,16 @@ services:
       - ./containers/wazuh/certs/wazuh.manager-key.pem:/etc/ssl/filebeat.key:ro
       # Logs de Suricata montados para integracion NIDS -> SIEM
       - suricata-logs:/var/ossec/logs/suricata:ro
+      # Init script para crear directorios requeridos por analysisd en bootes limpios
+      - ./containers/wazuh/config/wazuh_manager/init-dirs.sh:/etc/cont-init.d/0-a-create-dirs:ro
+      # Config y reglas custom (tienen precedencia sobre el volumen)
+      - ./containers/wazuh/config/wazuh_manager/ossec.conf:/wazuh-config-mount/etc/ossec.conf:ro
+      - ./containers/wazuh/rules/layer2_rules.xml:/var/ossec/etc/rules/layer2_rules.xml:ro
+      # Volúmenes persistentes: analysisd y remoted no pierden dirs entre reinicios
+      - wazuh-manager-logs:/var/ossec/logs
+      - wazuh-manager-queue:/var/ossec/queue
+      - wazuh-manager-etc:/var/ossec/etc
+      - wazuh-manager-api:/var/ossec/api/configuration
     networks:
       ctf-network:
         ipv4_address: 172.20.0.240
@@ -348,6 +358,10 @@ volumes:
   wazuh-dashboard-config:
   wazuh-dashboard-custom:
   suricata-logs:
+  wazuh-manager-logs:
+  wazuh-manager-queue:
+  wazuh-manager-etc:
+  wazuh-manager-api:
 
 # =============================================================================
 # RED DOCKER BRIDGE PERSONALIZADA

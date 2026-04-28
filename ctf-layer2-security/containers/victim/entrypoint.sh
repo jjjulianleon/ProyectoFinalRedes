@@ -10,6 +10,8 @@ sed "s/MANAGER_IP/${MANAGER_IP}/g; s/AGENT_NAME/$(hostname)/g" \
     /var/ossec/etc/ossec.conf > /tmp/ossec_rendered.conf && \
     mv /tmp/ossec_rendered.conf /var/ossec/etc/ossec.conf
 until bash -c "echo >/dev/tcp/${MANAGER_IP}/1515" 2>/dev/null; do sleep 2; done
+until bash -c "echo >/dev/tcp/${MANAGER_IP}/1514" 2>/dev/null; do sleep 2; done
+sleep 10
 # Foreground con & es más robusto en contenedores sin systemd
 /var/ossec/bin/wazuh-agentd -f &
 sleep 3
