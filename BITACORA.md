@@ -91,31 +91,31 @@
 - [x] Reglas custom de Capa 2 creadas (layer2.rules)
 - [x] Contenedor corriendo y capturando tráfico
 
-### Pendiente (se valida en Fase 5-6)
-- [ ] Verificar detección de ARP Spoofing con reglas Suricata
-- [ ] Verificar detección de MAC Flooding con reglas Suricata
-- [ ] Integrar alertas de Suricata con Wazuh
-- [ ] Instalar agentes Wazuh en contenedores víctima
-- [ ] Validar flujo completo de alertas end-to-end
+### Completado
+- [x] Verificar detección de ARP Spoofing con reglas Suricata (1500+ alertas)
+- [x] Verificar detección de MAC Flooding con reglas Suricata
+- [x] Integrar alertas de Suricata con Wazuh (via volume suricata-logs)
+- [x] Instalar agentes Wazuh HIDS en victim1/2/3, redteam, blueteam
+- [x] Validar flujo completo de alertas end-to-end
 
 ---
 
 ## Fase 4: Scripts Ofensivos (Red Team)
-**Estado**: PENDIENTE
+**Estado**: COMPLETADA
 
-- [ ] arp_spoof.py - ARP Spoofing con Scapy (MITM)
-- [ ] mac_flood.py - MAC Flooding con Scapy
-- [ ] capture_flags.py - Sniffing y extracción de flags
-- [ ] submit_flag.py - Envío automático a CTFd via API
+- [x] arp_spoof.py - ARP Spoofing con Scapy (MITM) - verificado funcional
+- [x] mac_flood.py - MAC Flooding con Scapy - verificado funcional
+- [x] capture_flags.py - Sniffing y extracción de flags - verificado funcional
+- [x] submit_flag.py - Envío automático a CTFd via API - fix aplicado (CookieJar + regex nonce)
 
 ---
 
 ## Fase 5: Scripts Defensivos (Blue Team)
-**Estado**: PENDIENTE
+**Estado**: COMPLETADA
 
-- [ ] arp_monitor.py - Monitor de ARP con Scapy
-- [ ] mac_anomaly_detector.py - Detector de MAC flooding
-- [ ] arp_restore.py - Restaurador de tablas ARP
+- [x] arp_monitor.py - Monitor de ARP con Scapy - detecta spoofing en tiempo real
+- [x] mac_anomaly_detector.py - Detector de MAC flooding - verificado funcional
+- [x] arp_restore.py - Restaurador de tablas ARP - verificado funcional
 
 ---
 
@@ -156,6 +156,10 @@
 | ossec.conf doble bloque global | Simplificado a un solo bloque |
 | Suricata hostname + network_mode conflicto | Cambiado a red normal con IP estática |
 | Kali pip3 externally-managed-environment | Ejecutado setup desde contenedor victim |
+| Wazuh agents: Duplicate agent name al reiniciar | Se eliminan agentes viejos via API antes de rebuild; <force> va en el MANAGER (auth), NO en el agente |
+| Agentes con keys obsoletas post-rebuild | Limpiar /var/ossec/etc/client.keys antes de reiniciar agentd |
+| Victims sin NET_ADMIN/NET_RAW | Agregado cap_add a los 3 contenedores victim en docker-compose.yml |
+| CTFd: no setup inicial al levantar | Automatizado via POST /setup + login + CSRF token en curl |
 
 ---
 

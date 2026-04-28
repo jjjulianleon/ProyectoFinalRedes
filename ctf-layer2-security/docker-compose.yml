@@ -34,6 +34,9 @@ services:
         VICTIM_ID: "1"
     container_name: victim1
     hostname: victim1
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
     environment:
       - VICTIM_ID=1
       - FLAG=${FLAG1}
@@ -53,6 +56,9 @@ services:
         VICTIM_ID: "2"
     container_name: victim2
     hostname: victim2
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
     environment:
       - VICTIM_ID=2
       - FLAG=${FLAG2}
@@ -72,6 +78,9 @@ services:
         VICTIM_ID: "3"
     container_name: victim3
     hostname: victim3
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
     environment:
       - VICTIM_ID=3
       - FLAG=${FLAG3}
