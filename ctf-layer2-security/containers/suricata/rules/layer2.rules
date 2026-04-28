@@ -2,58 +2,36 @@
 # Reglas Suricata Custom - Deteccion de Ataques de Capa 2
 # CTF Layer 2 Security - ARP Spoofing & MAC Flooding
 #
-# NOTA: Suricata no soporta "arp" como protocolo en reglas.
-# Para detectar ARP a nivel de capa 2, usamos "pkthdr" con content matching
-# sobre los bytes raw del frame Ethernet + ARP.
+# Estrategia de deteccion ARP via pkthdr (raw packet bytes):
+#   Estructura Ethernet+ARP en bytes desde inicio del frame:
+#     Offset 12-13: EtherType 0x0806 = ARP
+#     Offset 20-21: ARP Operation (0x0001=Request, 0x0002=Reply)
+#     Offset 22-27: Sender MAC (SHA)
+#     Offset 28-31: Sender IP (SPA)
+#     Offset 38-41: Target IP (TPA)
 #
-# Estructura de un frame ARP sobre Ethernet:
-#   Bytes 0-5:   Destination MAC
-#   Bytes 6-11:  Source MAC
-#   Bytes 12-13: EtherType (0x0806 = ARP)
-#   Bytes 14-15: Hardware type (0x0001 = Ethernet)
-#   Bytes 16-17: Protocol type (0x0800 = IPv4)
-#   Byte  18:    Hardware address length (6)
-#   Byte  19:    Protocol address length (4)
-#   Bytes 20-21: Operation (0x0001=Request, 0x0002=Reply)
-#   Bytes 22-27: Sender MAC
-#   Bytes 28-31: Sender IP
-#   Bytes 32-37: Target MAC
-#   Bytes 38-41: Target IP
+# Deteccion HTTP via reglas standard (payload inspection).
 # ============================================================================
 
 # === DETECCION DE ARP SPOOFING ===
 
-# Regla 1000001: Detecta ARP Reply (opcode 2)
-# Un ARP Reply broadcast es sospechoso (normalmente son unicast).
-# El atacante usa broadcast para envenenar a toda la red.
-alert pkthdr any any -> any any (msg:"CTF - ARP Reply detectado (posible ARP Spoofing)"; content:"|08 06|"; offset:12; depth:2; content:"|00 02|"; offset:20; depth:2; sid:1000001; rev:2; classtype:misc-attack;)
+# Regla 1000001: Detecta ARP Reply (operacion = 0x0002)
+# EtherType 0x0806 en offset 12, operacion 0x0002 en offset 20
+alert pkthdr any any -> any any (msg:"CTF - ARP Reply detectado (posible ARP Spoofing)"; content:"|08 06|"; offset:12; depth:2; content:"|00 02|"; offset:20; depth:2; sid:1000001; rev:4; classtype:misc-attack;)
 
-# Regla 1000002: Detecta alto volumen de ARP Replies
-# Durante ARP Spoofing activo, el atacante envia replies constantemente.
-# Umbral: mas de 10 en 5 segundos
-alert pkthdr any any -> any any (msg:"CTF - ALERTA: Alto volumen de ARP Replies - ARP Spoofing en progreso"; content:"|08 06|"; offset:12; depth:2; content:"|00 02|"; offset:20; depth:2; threshold:type both, track by_src, count 10, seconds 5; sid:1000002; rev:2; classtype:misc-attack;)
+# Regla 1000002: Alto volumen de ARP Replies (ARP Spoofing activo)
+# Umbral: mas de 10 ARP Replies en 5 segundos desde la misma IP origen
+alert pkthdr any any -> any any (msg:"CTF - ALERTA: Alto volumen de ARP Replies - ARP Spoofing en progreso"; content:"|08 06|"; offset:12; depth:2; content:"|00 02|"; offset:20; depth:2; threshold:type both, track by_src, count 10, seconds 5; sid:1000002; rev:4; classtype:misc-attack;)
 
-# Regla 1000003: Detecta ARP Reply con IP del gateway (172.20.0.2 = ac.14.00.02)
-# Si alguien que NO es el gateway envia un ARP Reply diciendo ser 172.20.0.2,
-# es ARP Spoofing. La IP del gateway esta en sender IP (bytes 28-31).
-alert pkthdr any any -> any any (msg:"CTF - CRITICO: ARP Reply suplantando IP del Gateway (172.20.0.2)"; content:"|08 06|"; offset:12; depth:2; content:"|00 02|"; offset:20; depth:2; content:"|ac 14 00 02|"; offset:28; depth:4; sid:1000003; rev:2; classtype:misc-attack;)
-
-# === DETECCION DE MAC FLOODING ===
-
-# Regla 1000010: Detecta volumen anomalo de ARP Requests
-# MAC Flooding genera miles de ARP Requests con MACs aleatorias.
-# Umbral: mas de 50 paquetes ARP en 3 segundos
-alert pkthdr any any -> any any (msg:"CTF - ALERTA: Volumen anomalo de paquetes ARP - posible MAC Flooding"; content:"|08 06|"; offset:12; depth:2; threshold:type both, track by_src, count 50, seconds 3; sid:1000010; rev:2; classtype:misc-attack;)
+# Regla 1000010: Volumen anomalo de ARP Requests (MAC Flooding)
+# track by_rule (no by_src): mac_flood usa MACs origen aleatorias en cada paquete,
+# por lo que nunca acumula 50 desde el mismo origen. by_rule cuenta el total global.
+alert pkthdr any any -> any any (msg:"CTF - ALERTA: Volumen anomalo de paquetes ARP - posible MAC Flooding"; content:"|08 06|"; offset:12; depth:2; content:"|00 01|"; offset:20; depth:2; threshold:type both, track by_rule, count 50, seconds 3; sid:1000010; rev:5; classtype:misc-attack;)
 
 # === DETECCION DE TRAFICO SOSPECHOSO (HTTP) ===
 
 # Regla 1000020: Detecta flags del CTF transitando en texto plano
-# Si una flag viaja por HTTP sin cifrar, Suricata la detecta
 alert http any any -> any any (msg:"CTF - Flag detectada en trafico HTTP"; content:"FLAG{"; nocase; sid:1000020; rev:1; classtype:bad-unknown;)
-
-# Regla 1000021: Detecta credenciales/tokens en texto plano
-# El agente de monitoreo (victim3) envia auth_token al gateway via HTTP POST
-alert http any any -> any any (msg:"CTF - Credenciales en texto plano detectadas (auth_token)"; content:"auth_token="; nocase; sid:1000021; rev:1; classtype:bad-unknown;)
 
 # Regla 1000022: Detecta acceso a archivos de credenciales
 alert http any any -> any any (msg:"CTF - Acceso a archivo de credenciales (db_credentials)"; content:"db_credentials"; nocase; sid:1000022; rev:1; classtype:bad-unknown;)

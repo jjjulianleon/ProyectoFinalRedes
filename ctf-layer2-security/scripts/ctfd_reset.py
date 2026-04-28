@@ -38,20 +38,24 @@ def main():
         opener.open(req)
     print(f"  [+] {len(subs)} submissions eliminadas — scoreboard en cero")
 
-    # Crear usuario blueteam si no existe
+    # Crear usuarios blueteam y redteam si no existen
     r = opener.open(request.Request(BASE + "/api/v1/users?per_page=100", headers=headers))
-    users = json.loads(r.read().decode()).get("data", [])
-    if "blueteam" not in [u["name"] for u in users]:
-        body = json.dumps({"name": "blueteam", "email": "blueteam@ctf.local",
-                           "password": "blueteam123", "type": "user"}).encode()
-        req = request.Request(BASE + "/api/v1/users", data=body, headers=headers, method="POST")
-        try:
-            opener.open(req)
-            print("  [+] Usuario blueteam creado")
-        except error.HTTPError as e:
-            print(f"  [!] Error creando blueteam: {e.read().decode()[:100]}")
-    else:
-        print("  [+] Usuario blueteam ya existe")
+    existing = [u["name"] for u in json.loads(r.read().decode()).get("data", [])]
+    for name, email, pwd in [
+        ("blueteam", "blueteam@ctf.local", "blueteam123"),
+        ("redteam",  "redteam@ctf.local",  "redteam123"),
+    ]:
+        if name not in existing:
+            body = json.dumps({"name": name, "email": email,
+                               "password": pwd, "type": "user"}).encode()
+            try:
+                opener.open(request.Request(BASE + "/api/v1/users", data=body,
+                                            headers=headers, method="POST"))
+                print(f"  [+] Usuario {name} creado")
+            except error.HTTPError as e:
+                print(f"  [!] Error creando {name}: {e.read().decode()[:100]}")
+        else:
+            print(f"  [+] Usuario {name} ya existe")
 
 
 if __name__ == "__main__":

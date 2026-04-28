@@ -27,7 +27,7 @@ class StatusHandler(SimpleHTTPRequestHandler):
     <h1>Agente de Monitoreo</h1>
     <p>Estado: ACTIVO</p>
     <p>Enviando reportes periodicos al gateway...</p>
-    <p>Intervalo: cada 10 segundos</p>
+    <p>Intervalo: cada 10 segundos (solo durante demo activa)</p>
     <footer>Monitoring Agent v1.0</footer>
 </body>
 </html>"""
@@ -43,14 +43,23 @@ class StatusHandler(SimpleHTTPRequestHandler):
         print(f"[Victim3-Status] {self.client_address[0]} - {format % args}")
 
 
+DEMO_TRIGGER = "/tmp/demo_active"
+
+
 def send_periodic_report():
     """
     Envia reportes periodicos al gateway en texto plano via HTTP.
     El payload incluye la flag como parte de un "reporte de seguridad".
     Un atacante con MITM puede capturar estos paquetes.
+
+    Solo transmite cuando existe el archivo /tmp/demo_active.
+    El script de demo crea ese archivo antes de atacar a victim3
+    y lo elimina al terminar, evitando ruido fuera de la demo.
     """
     while True:
         time.sleep(10)
+        if not os.path.exists(DEMO_TRIGGER):
+            continue
         payload = (
             f"SECURITY_REPORT|timestamp={int(time.time())}"
             f"|host=victim3|status=ok"
@@ -79,5 +88,5 @@ if __name__ == "__main__":
     # Servidor HTTP para mostrar estado
     server = HTTPServer(("0.0.0.0", PORT), StatusHandler)
     print(f"[Victim3] Agente de monitoreo en puerto {PORT}")
-    print(f"[Victim3] Enviando reportes con flag al gateway cada 10s")
+    print(f"[Victim3] Enviando reportes con flag al gateway cada 10s (activo solo con /tmp/demo_active)")
     server.serve_forever()

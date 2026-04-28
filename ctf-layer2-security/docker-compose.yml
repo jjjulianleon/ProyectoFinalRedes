@@ -279,9 +279,10 @@ services:
       - suricata-logs:/var/ossec/logs/suricata:ro
       # Init script para crear directorios requeridos por analysisd en bootes limpios
       - ./containers/wazuh/config/wazuh_manager/init-dirs.sh:/etc/cont-init.d/0-a-create-dirs:ro
-      # Config y reglas custom (tienen precedencia sobre el volumen)
+      # Config y reglas custom via WAZUH_CONFIG_MOUNT (el init script las copia
+      # al volumen en cada arranque, evitando el conflicto volumen vs bind-mount)
       - ./containers/wazuh/config/wazuh_manager/ossec.conf:/wazuh-config-mount/etc/ossec.conf:ro
-      - ./containers/wazuh/rules/layer2_rules.xml:/var/ossec/etc/rules/layer2_rules.xml:ro
+      - ./containers/wazuh/rules/layer2_rules.xml:/wazuh-config-mount/etc/rules/layer2_rules.xml:ro
       # Volúmenes persistentes: analysisd y remoted no pierden dirs entre reinicios
       - wazuh-manager-logs:/var/ossec/logs
       - wazuh-manager-queue:/var/ossec/queue
