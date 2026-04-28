@@ -25,6 +25,23 @@ NC='\033[0m'
 BOLD='\033[1m'
 
 EVIDENCE_DIR="$(pwd)/evidence_$(date +%Y%m%d_%H%M%S)"
+CTFD_USER="redteam"
+CTFD_PASS="redteam123"
+
+submit_flag() {
+    local flag="$1"
+    local challenge_id="$2"
+    local challenge_name="$3"
+    if [ -z "$flag" ] || [ "$flag" = "NO ENCONTRADA" ]; then
+        echo -e "  ${RED}[!] Flag no capturada — no se puede enviar al CTFd${NC}"
+        return
+    fi
+    echo -e "  ${CYAN}[CTFd] Enviando flag al challenge ${challenge_name} (id=${challenge_id})...${NC}"
+    docker exec redteam python3 /tools/submit_flag.py \
+        -f "$flag" -c "$challenge_id" \
+        -u "$CTFD_USER" -p "$CTFD_PASS" \
+        --url http://172.20.0.250:8000 2>&1 | sed 's/^/    /'
+}
 
 banner() {
     echo ""
@@ -131,6 +148,7 @@ info "Respuesta guardada en victim1_response.html"
 # Extraer flag de victim1
 FLAG1=$(grep -oP 'FLAG\{[^}]+\}' "$EVIDENCE_DIR/victim1_response.html" 2>/dev/null || echo "NO ENCONTRADA")
 echo -e "  ${GREEN}${BOLD}  Flag 1: $FLAG1${NC}"
+submit_flag "$FLAG1" 1 "Hidden in Plain Sight"
 
 # --- Ataque a Victim 2 (flag en archivo) ---
 step "ARP Spoofing: victim2 <-> gateway"
@@ -145,6 +163,7 @@ info "Credenciales guardadas en victim2_credentials.txt"
 
 FLAG2=$(grep -oP 'FLAG\{[^}]+\}' "$EVIDENCE_DIR/victim2_credentials.txt" 2>/dev/null || echo "NO ENCONTRADA")
 echo -e "  ${GREEN}${BOLD}  Flag 2: $FLAG2${NC}"
+submit_flag "$FLAG2" 2 "Leaked Credentials"
 
 # --- Ataque a Victim 3 (flag en tráfico periódico) ---
 step "ARP Spoofing: victim3 <-> gateway"
@@ -159,6 +178,7 @@ info "Tráfico capturado en victim3_traffic.txt"
 
 FLAG3=$(grep -oP 'FLAG\{[^}]+\}' "$EVIDENCE_DIR/victim3_traffic.txt" 2>/dev/null || echo "NO ENCONTRADA")
 echo -e "  ${GREEN}${BOLD}  Flag 3: $FLAG3${NC}"
+submit_flag "$FLAG3" 3 "Intercept the Report"
 
 # Guardar tablas ARP durante ataque
 step "Guardando tablas ARP durante ataque (envenenadas)..."
@@ -182,6 +202,7 @@ docker exec redteam python3 /tools/mac_flood.py -c 2000 --delay 0.001 \
     > "$EVIDENCE_DIR/mac_flood_output.txt" 2>&1
 info "Resultado guardado en mac_flood_output.txt"
 cat "$EVIDENCE_DIR/mac_flood_output.txt" | tail -3
+submit_flag "FLAG{mac_flood_broadcast_leak}" 4 "Flood the Switch"
 
 # ============================================================
 # FASE 6: Blue Team - Restauración
